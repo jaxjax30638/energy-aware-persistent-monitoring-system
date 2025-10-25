@@ -27,6 +27,7 @@ classdef SimulationVisualizer < handle
         target_global_objective_texts
         agent_battery_texts
         agent_energy_texts
+        agent_index_texts
         blink_state = false  % Track blinking state
     end
     
@@ -88,12 +89,11 @@ classdef SimulationVisualizer < handle
                 pos = agent.position;
                 
                 % Create agent plot (triangle)
-                plot_handle = plot(pos(1), pos(2), '^', 'MarkerSize', 12, ...
+                plot_handle = plot(pos(1), pos(2), '^', 'MarkerSize', 14, ...
                                  'MarkerFaceColor', 'blue', 'MarkerEdgeColor', 'black', 'LineWidth', 2);
                 
                 % Add agent index text
-                text(pos(1)-0.5, pos(2)-0.5, sprintf('A%d', agent.index), ...
-                     'FontSize', 10, 'FontWeight', 'bold');
+                % move this to update state that move with the agent 
                 
                 % Store plot handle
                 obj.agent_plots = [obj.agent_plots, plot_handle];
@@ -150,6 +150,7 @@ classdef SimulationVisualizer < handle
                     % Set color based on target mode
                     uncertainty = target.uncertainty;
                     objective = target.objective;
+
                     if target.mode == "monitor"
                         color = 'green';
                     else
@@ -208,33 +209,27 @@ classdef SimulationVisualizer < handle
                     end
                     set(obj.agent_plots(i), 'MarkerFaceColor', color);
 
-                    % Update agent battery text
+                    % Update agent battery and energy text
                     if length(obj.agent_battery_texts) >= i && ~isempty(obj.agent_battery_texts(i))
                         try
                             delete(obj.agent_battery_texts(i));
                             delete(obj.agent_energy_texts(i));
+                            delete(obj.agent_index_texts(i));
                         catch
                             % Text object might already be deleted
                         end
                     end
-                    obj.agent_battery_texts(i) = text(pos(1)-0.5, pos(2)+0.5, ...
-                        sprintf('%.2f%%', battery_percentage), ...
+                    obj.agent_battery_texts(i) = text(-4.5, -3.0, ...
+                        sprintf('Agent %d: %.2f%%', i, battery_percentage), ...
                         'FontSize', 8, 'Color', 'black', 'FontWeight', 'bold');
-                    obj.agent_energy_texts(i) = text(pos(1)-0.5, pos(2)+1.0, ...
-                        sprintf('E=%.1f', e_total), ...
-                        'FontSize', 8, 'Color', 'white', 'FontWeight', 'bold');
+                    obj.agent_energy_texts(i) = text(-4.5, -4.0, ...
+                        sprintf('Agent %d: Energy consumed = %.1f', i, e_total), ...
+                        'FontSize', 8, 'Color', 'black', 'FontWeight', 'bold');
+                    obj.agent_index_texts(i) = text(pos(1)-0.12, pos(2)+0.1, sprintf('%d', agent.index), ...
+                     'FontSize', 10, 'FontWeight', 'bold');
 
-                    % Update agent energy text
-                    if length(obj.agent_energy_texts) >= i && ~isempty(obj.agent_energy_texts(i))
-                        try
-                            delete(obj.agent_energy_texts(i));
-                        catch
-                            % Text object might already be deleted
-                        end
-                    end
-                    obj.agent_energy_texts(i) = text(pos(1)+0.5, pos(2)+1.0, ...
-                        sprintf('E=%.1f', agent.e_total), ...
-                        'FontSize', 8, 'Color', 'black', 'FontWeight', 'bold');
+                    
+                    
                 end
             end
             
