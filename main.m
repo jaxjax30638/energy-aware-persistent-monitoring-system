@@ -70,3 +70,8 @@ for i = 1:delta_time:T
     % Pause for animation effect
     pause(0.01);
 end
+
+
+
+
+%% This is to test what the hell is the vscode git extension doing
