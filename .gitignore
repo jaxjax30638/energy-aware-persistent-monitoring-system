@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# MATLAB temporary/backups and outputs
+*~ 
+*.m~
+*.asv
+*.mat
+*.fig
+*.mlx
+
+# Editor/project files
+.vscode/
+.idea/
