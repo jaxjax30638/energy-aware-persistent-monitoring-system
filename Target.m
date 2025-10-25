@@ -138,9 +138,7 @@ classdef Target < handle
             R_unsaturated = R_initial + obj.A * delta_time - obj.B * N * delta_time;
             R_value = max(0, R_unsaturated);
 
-            % copute objective value            # Create an ed25519 key (recommended). Replace email with your GitHub email.
-            ssh-keygen -t ed25519 -C "you@example.com"
-            # Accept defaults (press Enter) and optionally set a passphrase.            cat ~/.ssh/id_ed25519.pub
+            % copute objective value            
             if R_unsaturated <= 0
                 saturation_time = R_initial / -(obj.A - obj.B * N);
                 objective_value = (saturation_time * R_initial) / 2;
