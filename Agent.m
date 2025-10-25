@@ -356,7 +356,7 @@ classdef Agent < handle
 
                     % update battery based on energy consumption
                     obj.energy_calculation(delta_time);
-                    if obj.battery_percentage <= 90
+                    if obj.battery_percentage <= 10
                         obj.mode = "power_outage";
                         return; % is this needed? what can it do ?
                     end
@@ -387,7 +387,7 @@ classdef Agent < handle
 
                     % update battery based on energy consumption
                     obj.energy_calculation(delta_time);
-                    if obj.battery_percentage <= 90
+                    if obj.battery_percentage <= 10
                         obj.mode = "power_outage";
                         return; % is this needed? what can it do ?
                     end
@@ -417,7 +417,7 @@ classdef Agent < handle
 
                     % update battery based on energy consumption
                     obj.energy_calculation(delta_time);
-                    if obj.battery_percentage <= 90
+                    if obj.battery_percentage <= 10
                         obj.mode = "power_outage";
                         return; % is this needed? what can it do ?
                     end
@@ -470,7 +470,17 @@ classdef Agent < handle
         end
 
 
-        % possible function???
+        % RHCP method placeholder
+        % this is where agent should be find the optimal decision based on RHCP
+
+        % function that calculate the optimal target to travel and travel time rho
+        % horizon should be defined as the rho1 , tau1; find optimal (rho1, tau1)^
+        % the ideal output is the next target indext to visit and te travel time rho (only execute rho1)
+
+        % function that calculate the optimal dwelling time tau
+        % horizon should be tau1 rho1 tau2; find optimal (tau1, rho1, tau2)^
+        % the ideal output is the dwelling time tau at the target (only execute tau1)
+
 
     end
 end
