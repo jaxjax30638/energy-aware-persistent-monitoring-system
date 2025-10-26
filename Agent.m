@@ -473,14 +473,97 @@ classdef Agent < handle
         % RHCP method placeholder
         % this is where agent should be find the optimal decision based on RHCP
 
-        % function that calculate the optimal target to travel and travel time rho
-        % horizon should be defined as the rho1 , tau1; find optimal (rho1, tau1)^
-        % the ideal output is the next target indext to visit and te travel time rho (only execute rho1)
+        % calculate uncertainty after monitored time for single target
+        function r = uncertainty_mon(r0, A, B ,t)
+            r = r0 + (A - B)*t;
+        end
+        % calculate uncertainty after unmonitored time for single target
+        function r = uncertainty_unmon(r0, A, t)
+            r = r0 + A*t;
+        end
+        % calculate dwell phase objective value
+        % r0_sum is the inital uncertainty of all targets (get it through uncertainty function above)
+        % A_sum is the increase parameter for all targets Target.A or something 
+        % B is the decrease paramter for the target agent is dwelling at
+        % tau is the dwell time that needs to find
+        function J = Dwell(r0_sum, A_sum, B, tau)
+            J = r0_sum + 0.5*(A_sum - B)*tau^2;
+        end
+        % calculate dwell phase objective value
+        % r0_sum is the inital uncertainty of all targets (get it through uncertainty function above)
+        % A_sum is the increase parameter for all targets Target.A or something 
+        % rho is the travel time we need to find
+        function J = Travel(r0_sum,A_sum, rho)
+            J = r0_sum + 0.5*A_sum*rho^2;
+        end
+
+        
 
         % function that calculate the optimal dwelling time tau
         % horizon should be tau1 rho1 tau2; find optimal (tau1, rho1, tau2)^
         % the ideal output is the dwelling time tau at the target (only execute tau1)
+        %% Have no consider satruation time and its impact
+        function J = objective_dwell(tau1, rho1 , tau2, r0i, Ai, Bi, current_target_idx, all_target_indices, goal_target_idx)
+            % consist with dwell->travel->dwell
 
+            % r0i and Ai and Bi are matrix that store all targets correspond value
+            r0_sum = sum(r0i);
+            A_sum = sum(Ai);
+
+            %% first dwell time
+            % find the index of target that agent is monitored
+            J_first_dwell = Dwell(r0_sum, A_sum, Bi(current_target_idx), tau1);
+
+            % update r0_sum for next event // current target being monitored
+            for i = 1: length(all_target_indices)
+                if i == current_target_idx
+                    r0i(current_target_idx) = uncertainty_mon(r0i(current_target_idx), Ai(current_target_idx),Bi(current_target_idx), rho1);
+                else
+                    r0i(i) = uncertainty_unmon(r0i(i), Ai(i), tau1);
+                end
+            end
+            r0_sum = sum(r0i);
+
+            %% first travel time
+            J_first_travel = Travel(r0_sum, A_sum, rho1);
+
+            % update r0_sum for next event // all targets are not being monitored
+            for i = 1: length(all_target_indices)
+                r0i(i) = uncertainty_unmon(r0i(i), Ai(i), tau1);
+            end
+            %% Second dwell time 
+            J_second_dwell = Dwell(r0_sum, A_sum, Bi(goal_target_idx), tau2);
+
+
+            % combine 
+            J = (J_first_dwell + J_first_travel + J_second_dwell) / (tau1 + rho1 + tau2);
+
+        end
+        % function that calculate the optimal target to travel and travel time rho
+        % horizon should be defined as the rho1 , tau1; find optimal (rho1, tau1)^
+        % the ideal output is the next target indext to visit and te travel time rho (only execute rho1)
+        %% Have not considser saituration time and its impact
+        function J = objective_travel(rho1 , tau1, r0i, Ai, Bi, all_target_indices, goal_target_idx)
+            % consist with travel->dwell
+
+            % r0i and Ai and Bi are matrix that store all targets correspond value
+            r0_sum = sum(r0i);
+            A_sum = sum(Ai);
+
+            %% first travel time
+            J_first_travel = Travel(r0_sum, A_sum, rho1);
+
+            % update r0_sum for next event // all targets are not being monitored
+            for i = 1: length(all_target_indices)
+                r0i(i) = uncertainty_unmon(r0i(i), Ai(i), rho1);
+            end
+            %% first dwell time 
+            J_first_dwell = Dwell(r0_sum, A_sum, Bi(goal_target_idx), tau1);
+
+            % combine 
+            J = (J_first_travel + J_first_dwell) / (rho1 + tau1 );
+
+        end
 
     end
 end
