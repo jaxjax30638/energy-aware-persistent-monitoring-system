@@ -72,6 +72,3 @@ for i = 1:delta_time:T
 end
 
 
-
-
-%% This is to test what the hell is the vscode git extension doing
