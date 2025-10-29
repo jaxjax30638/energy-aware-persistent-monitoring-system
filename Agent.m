@@ -121,6 +121,8 @@ classdef Agent < handle
 
         % ===== MOTION POWER =====
         % Keep Create3 team's measurements as they are based on actual hardware
+        % fixed velocity
+        % include velocity variation(v , u)
         DRIVE_CURRENT  = 0.526;  % A
         IDLE_CURRENT   = 0.404;  % A
         MOT_MOVE = Agent.BAT_MON_V * Agent.DRIVE_CURRENT;   % 7.57 W
@@ -246,6 +248,16 @@ classdef Agent < handle
             obj.available_targets = targets;
         end
 
+        % find current index 
+        function current_target_idx = current_index(obj)
+            current_target_idx = 0;
+            for i = 1:length(obj.available_targets)
+                if norm(obj.position - obj.available_targets(i).position) < 0.2
+                    current_target_idx = i;
+                    break;
+                end
+            end
+        end
         % energy_calculation Compute energy usage and update battery state
         %   obj.energy_calculation(delta_time)
         %
@@ -430,36 +442,84 @@ classdef Agent < handle
                             obj.mode_history = [obj.mode_history, "planning"];
                             % ===== Random destination selection =====
                             % Select a different target
-                            % Find which target we're currently at
-                            current_target_idx = 0;
-                            for i = 1:length(obj.available_targets)
-                                if norm(obj.position - obj.available_targets(i).position) < 0.2
-                                    current_target_idx = i;
-                                    break;
+                            % Find which target agent currently at
+                            current_target_idx = obj.current_index();
+                            
+                            % make a available targets list
+                            if current_target_idx > 0
+                                avalible_indices = setdiff(1:length(obj.available_targets), current_target_idx);
+                            else 
+                                avalible_indices = 1:length(obj.available_targets);
+                            end
+
+                            % Grabbing essential data to process Reciding Horizon 
+                            r0i = [obj.available_targets.uncertainty]';          % Uncertaitny value from all target at that current time                      
+                            Ai = [obj.available_targets.A]';                     % Uncertainty grwoing parameter value from all target  
+                            Bi = [obj.available_targets.B]';                     % Ucertainty decreasing paratmeter value from all target
+                            all_target_indices = [obj.available_targets.index]'; % All target index
+
+                            % variable to find mininmal objective value
+                            J_temp = inf;
+                            for i = 1:length(avalible_indices)
+                                % try all possible goal target 
+                                goal_target_idx = avalible_indices(i);
+                                x0 = [1; 1];
+                                lb = [1; 1];
+                                ub = [inf; inf];
+                                % find the optimal decision through fmincon, (objective travel gives the objective value of 3 events horizon) See Function below
+                                [x_opt,J_opt] = fmincon(@(x) Agent.objective_travel(x(1), x(2),  ...
+                                    r0i, Ai, Bi,  all_target_indices, goal_target_idx), ...
+                                    x0,[],[],[],[],lb, ub);
+                                if J_temp > J_opt
+                                    J_temp = J_opt;
+                                    % Only execute the first event with target id and correspond rho value
+                                    target_idx = goal_target_idx;
+                                    new_rho = x_opt(1);
                                 end
                             end
-                            % randomly select a different target
-                            if current_target_idx > 0
-                                available_indices = setdiff(1:length(obj.available_targets), current_target_idx);
-                                target_idx = available_indices(randi(length(available_indices)));
-                            else
-                                target_idx = randi(length(obj.available_targets)); % fallback if we can't determine current target
-                            end
-                        
-                        
-                            % Use the existing set_goal_target method
-                            new_target_position = obj.available_targets(target_idx).position;
-                            new_rho = 1 + 5*rand(); % random rho between 1-6
-                            obj.set_goal_target(new_target_position, new_rho);
+                            obj.set_goal_target(obj.available_targets(target_idx).position, new_rho)
 
+                            
+                           
+                            
                         elseif obj.mode_history(end) == "traveling"
                             obj.mode_history = [obj.mode_history, "planning"];
-                        
-                        
-                            % ===== Random dwelling time generation =====
-                            % Generate random dwelling time using set_dwelling_time method
-                            random_tau = 1 + 4*rand(); % random tau between 1-5
-                            obj.set_dwelling_time(random_tau);
+                            %========= Finding optimze dwelling time using event driven receding horizon=======%
+                            % locate current target index
+                            current_target_idx = obj.current_index();
+                            
+                            % find out the avalible targets index to visit
+                            if current_target_idx > 0
+                                avalible_indices = setdiff(1:length(obj.available_targets), current_target_idx);
+                            else 
+                                avalible_indices = 1:length(obj.available_targets);
+                            end
+                            % Grabbing essential data to process Reciding Horizon 
+                            r0i = [obj.available_targets.uncertainty]';          % Uncertaitny value from all target at that current time                      
+                            Ai = [obj.available_targets.A]';                     % Uncertainty grwoing parameter value from all target  
+                            Bi = [obj.available_targets.B]';                     % Ucertainty decreasing paratmeter value from all target
+                            all_target_indices = [obj.available_targets.index]'; % All target index
+
+                            % variable to find mininmal objective value
+                            J_temp = inf;
+                            for i = 1:length(avalible_indices)
+                                goal_target_idx = avalible_indices(i);
+                                % try all posible target
+                                x0 = [1; 1; 1];
+                                lb = [0; 0; 0];
+                                ub = [inf; inf; inf];
+                                % find the optimal decision through fmincon (objective dwell gives the objective value of 2 events horizon) See Function below)
+                                [x_opt,J_opt] = fmincon(@(x) Agent.objective_dwell(x(1), x(2), x(3), ...
+                                    r0i, Ai, Bi, ...
+                                    current_target_idx, all_target_indices, goal_target_idx), ...
+                                    x0, [], [], [], [], lb, ub);
+                                if J_temp > J_opt
+                                    J_temp = J_opt;
+                                    % Only execute the first event with dwelling time tau
+                                    new_tau = x_opt(1);
+                                end
+                            end
+                            obj.set_dwelling_time(new_tau);
                         end
                     
                     end
@@ -468,41 +528,98 @@ classdef Agent < handle
                     
             end       
         end
-
+    end
+    methods (Static) 
 
         % RHCP method placeholder
         % this is where agent should be find the optimal decision based on RHCP
 
-        % calculate uncertainty after monitored time for single target
+        % uncertainty_mon Estimate uncertainty after monitored interval
+        %   r = Agent.uncertainty_mon(r0, A, B, t)
+        %
+        % Inputs:
+        %   r0 - current uncertainty
+        %   A  - natural growth rate
+        %   B  - reduction rate while observed
+        %   t  - monitored duration
+        %
+        % Output:
+        %   r  - uncertainty after time t, clamped at zero if saturated
         function r = uncertainty_mon(r0, A, B ,t)
-            r = r0 + (A - B)*t;
+            t_sat = -r0 / (A-B);
+            if t_sat >= t
+                r = r0 + (A -B)*t;
+            else
+                r = r0 + (A - B)*t_sat; % r = 0
+            end
         end
-        % calculate uncertainty after unmonitored time for single target
+        
+        % uncertainty_unmon Propagate uncertainty while unmonitored
+        %   r = Agent.uncertainty_unmon(r0, A, t)
+        %
+        % Inputs:
+        %   r0 - current uncertainty
+        %   A  - growth rate
+        %   t  - unmonitored duration
+        %
+        % Output:
+        %   r  - increased uncertainty after time t
         function r = uncertainty_unmon(r0, A, t)
             r = r0 + A*t;
         end
-        % calculate dwell phase objective value
-        % r0_sum is the inital uncertainty of all targets (get it through uncertainty function above)
-        % A_sum is the increase parameter for all targets Target.A or something 
-        % B is the decrease paramter for the target agent is dwelling at
-        % tau is the dwell time that needs to find
-        function J = Dwell(r0_sum, A_sum, B, tau)
-            J = r0_sum + 0.5*(A_sum - B)*tau^2;
+              
+        % Dwell Evaluate dwell-phase objective contribution
+        %   J = Agent.Dwell(r0_sum, A_sum, r0, A, B, tau)
+        %
+        % Inputs:
+        %   r0_sum - total initial uncertainty across all targets
+        %   A_sum - total growth rate across all targets
+        %   r0    - initial uncertainty of the serviced target
+        %   A     - growth rate of the serviced target
+        %   B     - reduction rate of the serviced target
+        %   tau   - dwell duration
+        %
+        % Output:
+        %   J     - dwell cost contribution for horizon averaging
+        function J = Dwell(r0_sum, A_sum,r0, A, B, tau)
+            t_sat = -r0 / (A-B);
+            if t_sat >= tau
+                J = r0_sum + 0.5*(A_sum - B)*tau^2;
+            else
+                J = (r0_sum - r0 + 0.5*(A_sum - A)*tau^2) + 0.5 * r0 * t_sat;
+            end 
+            
         end
-        % calculate dwell phase objective value
-        % r0_sum is the inital uncertainty of all targets (get it through uncertainty function above)
-        % A_sum is the increase parameter for all targets Target.A or something 
-        % rho is the travel time we need to find
+              
+        % Travel Evaluate travel-phase objective contribution
+        %   J = Agent.Travel(r0_sum, A_sum, rho)
+        %
+        % Inputs:
+        %   r0_sum - total uncertainty baseline
+        %   A_sum - total growth rate across targets
+        %   rho   - travel duration
+        %
+        % Output:
+        %   J     - travel cost contribution for horizon averaging
         function J = Travel(r0_sum,A_sum, rho)
             J = r0_sum + 0.5*A_sum*rho^2;
         end
 
-        
+        % objective_dwell Horizon cost for dwell-travel-dwell schedule
+        %   J = Agent.objective_dwell(tau1, rho1, tau2, r0i, Ai, Bi, current_idx, all_idx, goal_idx)
+        %
+        % Inputs:
+        %   tau1        - first dwell duration at current target
+        %   rho1        - travel duration to candidate goal
+        %   tau2        - dwell duration at candidate goal
+        %   r0i, Ai, Bi - vectors of uncertainties and rates for all targets
+        %   current_idx - index of currently serviced target
+        %   all_idx     - list of target indices
+        %   goal_idx    - index of candidate goal target
+        %
+        % Output:
+        %   J           - average cost over the combined horizon
 
-        % function that calculate the optimal dwelling time tau
-        % horizon should be tau1 rho1 tau2; find optimal (tau1, rho1, tau2)^
-        % the ideal output is the dwelling time tau at the target (only execute tau1)
-        %% Have no consider satruation time and its impact
         function J = objective_dwell(tau1, rho1 , tau2, r0i, Ai, Bi, current_target_idx, all_target_indices, goal_target_idx)
             % consist with dwell->travel->dwell
 
@@ -512,37 +629,46 @@ classdef Agent < handle
 
             %% first dwell time
             % find the index of target that agent is monitored
-            J_first_dwell = Dwell(r0_sum, A_sum, Bi(current_target_idx), tau1);
+            J_first_dwell = Agent.Dwell(r0_sum, A_sum,r0i(current_target_idx),Ai(current_target_idx), Bi(current_target_idx), tau1);
 
             % update r0_sum for next event // current target being monitored
             for i = 1: length(all_target_indices)
                 if i == current_target_idx
-                    r0i(current_target_idx) = uncertainty_mon(r0i(current_target_idx), Ai(current_target_idx),Bi(current_target_idx), rho1);
+                    r0i(current_target_idx) = Agent.uncertainty_mon(r0i(current_target_idx), Ai(current_target_idx),Bi(current_target_idx), rho1);
                 else
-                    r0i(i) = uncertainty_unmon(r0i(i), Ai(i), tau1);
+                    r0i(i) = Agent.uncertainty_unmon(r0i(i), Ai(i), tau1);
                 end
             end
             r0_sum = sum(r0i);
 
             %% first travel time
-            J_first_travel = Travel(r0_sum, A_sum, rho1);
+            J_first_travel = Agent.Travel(r0_sum, A_sum, rho1);
 
             % update r0_sum for next event // all targets are not being monitored
             for i = 1: length(all_target_indices)
-                r0i(i) = uncertainty_unmon(r0i(i), Ai(i), tau1);
+                r0i(i) = Agent.uncertainty_unmon(r0i(i), Ai(i), tau1);
             end
             %% Second dwell time 
-            J_second_dwell = Dwell(r0_sum, A_sum, Bi(goal_target_idx), tau2);
+            J_second_dwell = Agent.Dwell(r0_sum, A_sum, r0i(goal_target_idx),Ai(goal_target_idx),Bi(goal_target_idx), tau2);
 
 
             % combine 
             J = (J_first_dwell + J_first_travel + J_second_dwell) / (tau1 + rho1 + tau2);
 
         end
-        % function that calculate the optimal target to travel and travel time rho
-        % horizon should be defined as the rho1 , tau1; find optimal (rho1, tau1)^
-        % the ideal output is the next target indext to visit and te travel time rho (only execute rho1)
-        %% Have not considser saituration time and its impact
+
+        % objective_travel Horizon cost for travel-dwell schedule
+        %   J = Agent.objective_travel(rho1, tau1, r0i, Ai, Bi, all_idx, goal_idx)
+        %
+        % Inputs:
+        %   rho1        - travel duration to candidate goal
+        %   tau1        - dwell duration at candidate goal
+        %   r0i, Ai, Bi - vectors of uncertainties and rates for all targets
+        %   all_idx     - list of target indices
+        %   goal_idx    - index of candidate goal target
+        %
+        % Output:
+        %   J           - average cost for the two-phase horizon
         function J = objective_travel(rho1 , tau1, r0i, Ai, Bi, all_target_indices, goal_target_idx)
             % consist with travel->dwell
 
@@ -551,14 +677,14 @@ classdef Agent < handle
             A_sum = sum(Ai);
 
             %% first travel time
-            J_first_travel = Travel(r0_sum, A_sum, rho1);
+            J_first_travel = Agent.Travel(r0_sum, A_sum, rho1);
 
             % update r0_sum for next event // all targets are not being monitored
             for i = 1: length(all_target_indices)
-                r0i(i) = uncertainty_unmon(r0i(i), Ai(i), rho1);
+                r0i(i) = Agent.uncertainty_unmon(r0i(i), Ai(i), rho1);
             end
             %% first dwell time 
-            J_first_dwell = Dwell(r0_sum, A_sum, Bi(goal_target_idx), tau1);
+            J_first_dwell = Agent.Dwell(r0_sum, A_sum,r0i(goal_target_idx), Ai(goal_target_idx),Bi(goal_target_idx), tau1);
 
             % combine 
             J = (J_first_travel + J_first_dwell) / (rho1 + tau1 );

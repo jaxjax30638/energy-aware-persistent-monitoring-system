@@ -273,5 +273,43 @@ classdef SimulationVisualizer < handle
             % Refresh display
             drawnow;
         end
+
+        % plot_energy_battery Visualize agent energy and battery histories
+        %   viz.plot_energy_battery(agents)
+        %
+        % Inputs:
+        %   agents - array of Agent objects whose histories were recorded
+        %
+        % Opens a figure with two subplots:
+        %   (1) cumulative energy consumption
+        %   (2) battery percentage over time
+        function plot_energy_battery(obj, agents)
+            fig = figure('Name', 'Agent Energy & Battery History', ...
+                         'NumberTitle', 'off', 'Position', [200, 200, 900, 400]);
+            tiledlayout(fig, 1, 2, 'Padding', 'compact', 'TileSpacing', 'compact');
+
+            % Left subplot: energy
+            nexttile;
+            hold on; grid on;
+            title('Cumulative Energy'); xlabel('Step'); ylabel('Energy (Wh)');
+            for i = 1:numel(agents)
+                energy = agents(i).e_total_history;
+                if isempty(energy); continue; end
+                plot(0:numel(energy)-1, energy, 'DisplayName', sprintf('Agent %d', agents(i).index));
+            end
+            legend('show', 'Location', 'best');
+
+            % Right subplot: battery percentage
+            nexttile;
+            hold on; grid on;
+            title('Battery Percentage'); xlabel('Step'); ylabel('Battery (%)');
+            for i = 1:numel(agents)
+                soc = agents(i).battery_percentage_history;
+                if isempty(soc); continue; end
+                plot(0:numel(soc)-1, soc, 'DisplayName', sprintf('Agent %d', agents(i).index));
+            end
+            legend('show', 'Location', 'best');
+        end
+    
     end
 end
