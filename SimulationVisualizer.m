@@ -286,7 +286,7 @@ classdef SimulationVisualizer < handle
         function plot_energy_battery(obj, agents)
             fig = figure('Name', 'Agent Energy & Battery History', ...
                          'NumberTitle', 'off', 'Position', [200, 200, 900, 400]);
-            tiledlayout(fig, 1, 2, 'Padding', 'compact', 'TileSpacing', 'compact');
+            tiledlayout(fig, 1, 3, 'Padding', 'compact', 'TileSpacing', 'compact');
 
             % Left subplot: energy
             nexttile;
@@ -299,7 +299,7 @@ classdef SimulationVisualizer < handle
             end
             legend('show', 'Location', 'best');
 
-            % Right subplot: battery percentage
+            % middle subplot: battery percentage
             nexttile;
             hold on; grid on;
             title('Battery Percentage'); xlabel('Step'); ylabel('Battery (%)');
@@ -309,7 +309,100 @@ classdef SimulationVisualizer < handle
                 plot(0:numel(soc)-1, soc, 'DisplayName', sprintf('Agent %d', agents(i).index));
             end
             legend('show', 'Location', 'best');
+
+            % Right subplot: battery percentage
+            nexttile;
+            hold on; grid on;
+            title('Voltage'); xlabel('Step'); ylabel('Voltage (V)');
+            for i = 1:numel(agents)
+                volt = agents(i).voltage_history;
+                if isempty(volt); continue; end
+                plot(0:numel(volt)-1, volt, 'DisplayName', sprintf('Agent %d', agents(i).index));
+            end
+            legend('show', 'Location', 'best');
         end
-    
+        
+
+
+        % plot_energy_battery Visualize agent energy and battery histories
+        %   viz.plot_energy_battery(agents)
+        %
+        % Inputs:
+        %   agents - array of Agent objects whose histories were recorded
+        %
+        % Opens a figure with two subplots:
+        %   (1) cumulative energy consumption
+        %   (2) battery percentage over time
+        function plot_battery_compare(obj, agents)
+            figure('Name', 'Compare two Battery display', ...
+                         'NumberTitle', 'off', 'Position', [200, 200, 900, 400]);
+            
+
+            
+            hold on; grid on;
+            title('Voltage vs Coulomb'); xlabel('Step'); ylabel('Battery Percentage');
+            for i = 1:numel(agents)
+                soc_volt = agents(i).battery_percentage_history;
+                if isempty(soc_volt); continue; end
+                plot(0:numel(soc_volt)-1, soc_volt, 'DisplayName', sprintf('Agent %d', agents(i).index));
+            end
+            legend('show', 'Location', 'best');
+        end
+
+        function plot_voltage(obj, agents)
+            figure('Name', 'voltage', ...
+                         'NumberTitle', 'off', 'Position', [200, 200, 900, 400]);
+            
+
+            
+            hold on; grid on;
+            title('Voltage '); xlabel('Step'); ylabel('V');
+            for i = 1:numel(agents)
+                volt = agents(i).voltage_history;
+                if isempty(volt)
+                     continue; 
+                end
+                
+                plot(0:numel(volt)-1, volt,'DisplayName', sprintf('Agent %d', agents(i).index));
+            end
+            legend('show', 'Location', 'best');
+
+            
+        end
+        function plot_lookup(obj, agents)
+            figure('Name', 'Battery Polynomial Lookup Table', ...
+                         'NumberTitle', 'off', 'Position', [200, 200, 1000, 600]);
+            
+            hold on; grid on;
+            title('Battery Voltage → SOC Percentage (Polynomial Model)', 'FontSize', 14, 'FontWeight', 'bold');
+            xlabel('Voltage (V)', 'FontSize', 12);
+            ylabel('Battery Percentage (%)', 'FontSize', 12);
+            
+            % Plot lookup table for each agent
+            for i = 1:numel(agents)
+                agent = agents(i);
+                
+                % Ensure lookup table is built (will build if empty)
+                if isempty(agent.lookup_interpolant)
+                    agent.lookup(Agent.BAT_MON_V); % Trigger table build
+                end
+                
+                % Plot voltage vs percentage
+                if ~isempty(agent.lookup_voltage_table) && ~isempty(agent.lookup_percentage_table)
+                    plot(agent.lookup_voltage_table, agent.lookup_percentage_table, ...
+                        'LineWidth', 2, 'DisplayName', sprintf('Agent %d', agent.index));
+                end
+            end
+            
+            % Add reference lines for min/max voltages
+            ylim([0, 100]);
+            xlim([Agent.BAT_MIN_V - 0.5, Agent.BAT_MAX_V + 0.5]);
+            
+            % Vertical lines for voltage bounds
+            xline(Agent.BAT_MIN_V, 'r--', 'LineWidth', 1.5, 'DisplayName', sprintf('Min Voltage (%.1fV)', Agent.BAT_MIN_V));
+            xline(Agent.BAT_MAX_V, 'g--', 'LineWidth', 1.5, 'DisplayName', sprintf('Max Voltage (%.1fV)', Agent.BAT_MAX_V));
+            
+            legend('show', 'Location', 'best');
+        end
     end
 end

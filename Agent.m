@@ -27,14 +27,19 @@ classdef Agent < handle
     properties
         % ===== AGENT STATE =====
         % Agents behavior properties    
-        index    
+        index
+        % position: [x, y, theta] TODO: add theta    
         position
 
         mode
         mode_history
 
+        % velocity u
         velocity
         velocity_history
+        % ang_velocity omega
+        ang_velocity
+        ang_velocity_history
 
         goal_target
         goal_target_history
@@ -62,15 +67,11 @@ classdef Agent < handle
         e_mot_history
         e_total_history
 
+        soc
+        soc_history
+
         battery_percentage
         battery_percentage_history
-
-        battery_percentage_col
-        battery_percentage_col_history
-
-        battery_percentage_volt
-        battery_percentage_volt_history
-
         voltage_history
 
         % coulomb counting history
@@ -86,7 +87,13 @@ classdef Agent < handle
         theta_ou = 0.1;
         mu_ou = 0;
         sigma_ou = 0.2;
-        
+
+        sigma_v = 0.003;
+
+        % Lookup table properties (built once, reused)
+        lookup_voltage_table
+        lookup_percentage_table
+        lookup_interpolant
 
     end
     properties (Constant)
@@ -122,8 +129,10 @@ classdef Agent < handle
         % ===== BATTERY SPECIFICATIONS =====
         BAT_MON_V      = 14.4;  % V (nominal voltage)
         BAT_MAX_V      = 16.8;  % V (maximum voltage)
+        BAT_MIN_V      = 12.0;  % V (minimal voltage) 0% soc
         BAT_CUTOFF_V   = 10.8;  % V (BMS cutoff)
         BATTERY_E_Wh   = 26.0;  % Wh (capacity)
+        R_INTERNAL     = 0.08;  % Ohm (battery internal resistence)
 
         % ===== MOTION POWER =====
         % Keep Create3 team's measurements as they are based on actual hardware
@@ -150,11 +159,9 @@ classdef Agent < handle
                 3.0256e-17, -1.8926e-19, 7.9827e-22, -2.0344e-24, 2.3659e-27];
         
         % SOC look-up table / information
-        OCV_EMPTY = polyval(flip(Agent.k_dis), 0 * 20.0); % 0% SOC
-        OCV_FULL  = polyval(flip(Agent.k_dis), 1 * 20.0); % 100% SOC
-        OCV_MIN = min(Agent.BAT_CUTOFF_V, Agent.OCV_EMPTY);
-        OCV_MAX = max(Agent.BAT_MAX_V, Agent.OCV_FULL);
-        SCALE_FACTOR = (Agent.BAT_MAX_V - Agent.BAT_CUTOFF_V) / (Agent.OCV_MAX - Agent.OCV_MIN);
+        OCV_EMPTY = polyval(flip(Agent.k_dis), 0 * 20.0); % 0% SOC - polynomial output at empty
+        OCV_FULL  = polyval(flip(Agent.k_dis), 1 * 20.0); % 100% SOC - polynomial output at full
+        SCALE_FACTOR = (Agent.BAT_MAX_V - Agent.BAT_MIN_V) / (Agent.OCV_FULL - Agent.OCV_EMPTY);
 
     end    
     methods
@@ -163,11 +170,11 @@ classdef Agent < handle
         %
         % Inputs:
         %   index    - integer identifier for the agent
-        %   position - 1x2 numeric vector specifying initial [x y] position
+        %   position - 1x3 numeric vector specifying initial [x y theta] position
         function obj = Agent(index, position)
             obj.index = index;
             obj.position = position;    
-            obj.goal_target = [0,0]; % default goal target is [0,0]
+            obj.goal_target = [0,0,0]; % default goal target is [0,0,0]
             obj.mode = "idle"; % default mode is idle
             obj.velocity = [0, 0];
             obj.dwelling_time_remaining = 0;
@@ -196,14 +203,12 @@ classdef Agent < handle
             obj.q_mot_history = [];
             obj.q_total_history = [];
 
-            obj.battery_percentage_col = 100;   % Coulomb-count estimate
-            obj.battery_percentage_volt = 100;  % Voltage-based estimate
-            obj.battery_percentage = obj.battery_percentage_col;
-            obj.battery_percentage_col_history = [100];
-            obj.battery_percentage_volt_history = [100];
-            obj.battery_percentage_history = [obj.battery_percentage]; % legacy history
+            obj.battery_percentage = 100;
+            obj.battery_percentage_history = [100];
 
-            obj.voltage_history = [Agent.BAT_MAX_V]; % start with max voltage
+            obj.soc = 1;
+            obj.soc_history = [1];
+            obj.voltage_history = [];
         end
 
         % set_goal_target Assign a new target and travel time (rho)
@@ -321,45 +326,33 @@ classdef Agent < handle
 
             obj.e_total_history = [obj.e_total_history,obj.e_total];
 
+
+            
+            %% Obtain true SOC through coulomb counting  
             % Update battery state
-            v_curent = obj.voltage_history(end);
+            soc_current = obj.soc_history(end);
+            ocv_polynomial = polyval(flip(Agent.k_dis), soc_current * 20.0);
+            ocv_current = Agent.BAT_MIN_V + (ocv_polynomial - Agent.OCV_EMPTY) * Agent.SCALE_FACTOR;
 
-            % Coulomb counting
-            i_cpu = p_cpu / v_curent;
-            i_acc = p_acc / v_curent;
-            i_mot = p_mot / v_curent;
-
-            % update cumulative charge consumed (Q = I * delta_time)
-            obj.q_cpu_history = [obj.q_cpu_history, i_cpu * delta_time];
-            obj.q_acc_history = [obj.q_acc_history, i_acc * delta_time];
-            obj.q_mot_history = [obj.q_mot_history, i_mot * delta_time];
-            % cumulative coulombs consumed (sum of history) and account for efficiency
-            q_total_cumulative = (sum(obj.q_cpu_history) + sum(obj.q_acc_history) + sum(obj.q_mot_history)) / Agent.ETA_CONV;
-            obj.q_total_history = [obj.q_total_history, q_total_cumulative];
-
-            % Calculate total battery capacity in Coulombs
+            i_current = (ocv_current - sqrt(ocv_current^2 - 4 * Agent.R_INTERNAL * p_total)) /2 * Agent.R_INTERNAL;
+            % Safety check for negative current
+            if i_current < 0
+                i_current = 0;
+            end
+            
             % Q = E / V = (Battery energy Wh * 3600 s/h) / nominal voltage V
             Q_battery_C = (Agent.BATTERY_E_Wh * 3600) / Agent.BAT_MON_V;
-            % Update State of Charge (SOC)
-            soc_new = 1 - (q_total_cumulative / Q_battery_C);
-            soc_new = max(0, min(1, soc_new)); % Clamp between 0 and 1
-            % Convert SOC to percentage (0-100) via coulomb counting
-            obj.battery_percentage_col = soc_new * Agent.SOC_TO_PERCENTAGE / 100;
-            obj.battery_percentage = obj.battery_percentage_col; % retain legacy property
-            obj.battery_percentage_col_history = [obj.battery_percentage_col_history, obj.battery_percentage_col];
+            soc_new = soc_current - (i_current * delta_time) / Q_battery_C;
+            obj.soc_history = [obj.soc_history, soc_new];
+            obj.battery_percentage = soc_new * Agent.SOC_TO_PERCENTAGE / 100;
             obj.battery_percentage_history = [obj.battery_percentage_history, obj.battery_percentage];
 
-            % calculate voltage form soc using polynominal relationship
-            ocv_raw = polyval(flip(Agent.k_dis), soc_new * 20.0); % Convert SOC to percentage for polynomial
-            voltage_new = Agent.BAT_CUTOFF_V + (ocv_raw - Agent.OCV_MIN) * Agent.SCALE_FACTOR;
-            obj.voltage_history = [obj.voltage_history, voltage_new];
 
-            % Lookup SOC estimate from measured voltage
-            obj.battery_percentage_volt = Agent.lookup(voltage_new);
-            obj.battery_percentage_volt_history = [obj.battery_percentage_volt_history, obj.battery_percentage_volt];
-
-
-
+            % Calculate v_terminal 
+            % R_0 internal resistent dynamic flat at the middle spike at the soc high and low *(1+0.2*(1-4*soc_new*(1-soc_new))+0.4*((1-soc_new)^2))
+            v_terminal = ocv_current - Agent.R_INTERNAL*i_current;
+            obj.voltage_history = [obj.voltage_history, v_terminal];
+            
         end
 
         
@@ -545,28 +538,46 @@ classdef Agent < handle
                     
             end       
         end
-    end
-    methods (Static) 
         % SOC lookup table (voltage based)
-        function battery_percentage_volt = lookup(voltage)
+        function battery_percentage_volt = lookup(obj, voltage)
             % Build the lookup table only once and reuse it on subsequent calls
-            persistent voltage_table percentage_table lookup_fn
-
-            if isempty(lookup_fn)
+            
+            if isempty(obj.lookup_interpolant)
+                % Build lookup table once
                 soc_samples = linspace(0, 1, Agent.SOC_LOOKUP_POINTS);
                 ocv_values = polyval(flip(Agent.k_dis), soc_samples * 20.0); % Evaluate OCV curve
-                voltage_table = Agent.BAT_CUTOFF_V + (ocv_values - Agent.OCV_MIN) * Agent.SCALE_FACTOR;
+                voltage_table = Agent.BAT_MIN_V + (ocv_values - Agent.OCV_EMPTY) * Agent.SCALE_FACTOR;
                 percentage_table = soc_samples * Agent.SOC_TO_PERCENTAGE / 100; % Convert SOC to percent
+                
+                % Sort by voltage for interpolation
                 [voltage_table, sort_idx] = sort(voltage_table);
                 percentage_table = percentage_table(sort_idx);
-                lookup_fn = griddedInterpolant(voltage_table, percentage_table, 'pchip', 'nearest');
+                
+                % Store tables and create interpolant
+                obj.lookup_voltage_table = voltage_table;
+                obj.lookup_percentage_table = percentage_table;
+                obj.lookup_interpolant = griddedInterpolant(voltage_table, percentage_table, 'pchip', 'nearest');
+                
+                % Debug: Verify lookup table range
+                fprintf('Lookup table built: min_voltage=%.4fV (%.1f%%), max_voltage=%.4fV (%.1f%%), expected_max=%.4fV\n', ...
+                    voltage_table(1), percentage_table(1), voltage_table(end), percentage_table(end), Agent.BAT_MAX_V);
             end
 
-            voltage_clamped = min(max(voltage, Agent.BAT_CUTOFF_V), Agent.BAT_MAX_V);
-            battery_percentage_volt = lookup_fn(voltage_clamped);
+            % Use the stored interpolant
+            voltage_clamped = min(max(voltage, Agent.BAT_MIN_V), Agent.BAT_MAX_V);
+            battery_percentage_volt = obj.lookup_interpolant(voltage_clamped);
             battery_percentage_volt = max(0, min(100, battery_percentage_volt));
+            
+            % Debug: Check lookup result
+            if voltage > 16.0  % Only debug high voltages
+                fprintf('DEBUG lookup: input=%.4fV, clamped=%.4fV, result=%.2f%%\n', ...
+                    voltage, voltage_clamped, battery_percentage_volt);
+            end
         end    
 
+    end
+    methods (Static) 
+        
         % RHCP method placeholder
         % this is where agent should be find the optimal decision based on RHCP
 
