@@ -58,7 +58,7 @@ classdef Target < handle
             obj.history_uncertainty = [];
             obj.history_objective = [];
             obj.history_global_objective = [];
-            obj.history_time = [];
+            obj.history_time = [0];
         end
 
         % mode_switch Update target mode based on agent proximity
@@ -89,7 +89,7 @@ classdef Target < handle
     %   objective_value        - local objective for this time step
     %   global_objective_value - cumulative/global objective estimate
     function [R_value, objective_value, global_objective_value] = update_state(obj, delta_time, agent_position)
-            total_time = 0;
+            total_time = obj.history_time(end);
             obj.history_uncertainty = [obj.history_uncertainty, obj.uncertainty];  % update history
             obj.history_objective = [obj.history_objective, obj.objective];  % update history
             obj.history_global_objective = [obj.history_global_objective, obj.global_objective];  % update history

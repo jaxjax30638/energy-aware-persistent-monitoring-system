@@ -33,7 +33,7 @@ target3 = Target(3, [10, 10], 20, 1.5, 8);
 % Create agent object
 agent1 = Agent(1, [0, 0]);
 agent1.set_available_targets([target1, target2, target3]); % Pass target objects
-agent1.set_goal_target([5, 5], 2); % rho = 5 (travel time)
+agent1.set_goal_target([10, 5], 2); % rho = 5 (travel time)
 % Create visualizer
 viz = SimulationVisualizer();
 
@@ -70,3 +70,5 @@ for i = 1:delta_time:T
     % Pause for animation effect
     pause(0.01);
 end
+
+
