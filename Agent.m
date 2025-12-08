@@ -28,18 +28,36 @@ classdef Agent < handle
         % ===== AGENT STATE =====
         % Agents behavior properties    
         index
-        % position: [x, y, theta] TODO: add theta    
+        % position: [x, y, theta] TODO: add theta State   
         position
 
         mode
         mode_history
+        % kinematics models
+        kinematicsModels
 
-        % velocity u
+        track_width = 0.3;    % meter
+        wheel_radius = 0.05;  % meter
+
+        % controller
+        controller
+
+        % linear velocity u
+        lin_velocity
+        lin_acceleration
+        lin_velocity_history
+        % angular velocity omega
+        ang_velocity
+        ang_acceleration
+        ang_velocity_history
+
+        % trajectory
+        trajectory_turn
+        trajectory_move
+
+        % velocity for simulation display
         velocity
         velocity_history
-        % ang_velocity omega
-        ang_velocity
-        ang_velocity_history
 
         goal_target
         goal_target_history
@@ -56,10 +74,12 @@ classdef Agent < handle
         dwelling_time_remaining
         planning_time_remaining
         available_targets
-        travel_time_remaining   
+        current_time   
         
         % ===== ENERGY PROPERTIES =====
         e_total
+
+        motion_power % depend on linear velocity
 
         % Energy history
         e_cpu_history
@@ -132,13 +152,13 @@ classdef Agent < handle
         BAT_MIN_V      = 12.0;  % V (minimal voltage) 0% soc
         BAT_CUTOFF_V   = 10.8;  % V (BMS cutoff)
         BATTERY_E_Wh   = 26.0;  % Wh (capacity)
-        R_INTERNAL     = 0.08;  % Ohm (battery internal resistence)
+        R_INTERNAL     = 0.12;  % Ohm (battery internal resistence)
 
         % ===== MOTION POWER =====
         % Keep Create3 team's measurements as they are based on actual hardware
         % fixed velocity
         % include velocity variation(v , u)
-        DRIVE_CURRENT  = 0.526;  % A
+        DRIVE_CURRENT  = 0.526;  % A (0.31m/s linear velocity)
         IDLE_CURRENT   = 0.404;  % A
         MOT_MOVE = Agent.BAT_MON_V * Agent.DRIVE_CURRENT;   % 7.57 W
         MOT_IDLE = Agent.BAT_MON_V * Agent.IDLE_CURRENT;    % 5.82 W
@@ -173,12 +193,15 @@ classdef Agent < handle
         %   position - 1x3 numeric vector specifying initial [x y theta] position
         function obj = Agent(index, position)
             obj.index = index;
+            obj.kinematicsModels = differentialDriveKinematics('TrackWidth', obj.track_width,...
+                'WheelRadius', obj.wheel_radius);
+            obj.controller = controllerPurePursuit;
             obj.position = position;    
-            obj.goal_target = [0,0,0]; % default goal target is [0,0,0]
+            obj.goal_target = [0 0 0]; % default goal target is [0,0,0]
             obj.mode = "idle"; % default mode is idle
             obj.velocity = [0, 0];
             obj.dwelling_time_remaining = 0;
-            obj.travel_time_remaining = 0;
+            obj.current_time = 0;
             obj.planning_time_remaining = 0;
             obj.mode_history = [];
             obj.velocity_history = [];
@@ -217,26 +240,38 @@ classdef Agent < handle
         % Inputs:
         %   goal_target - 1x2 numeric vector of target [x y]
         %   rho         - desired travel time to reach the goal (seconds)
-        function obj = set_goal_target(obj, goal_target, rho)
+        % TODO modify this and add trajectory calculation waypointTrajectory or
+        % polynomialTrajectory  They have parameter of arrival time ; Sync
+        % the frequency, then update accordingly
+        % 
+        function obj = set_goal_target(obj, goal_target, rho, delta_time)
 
             obj.mode = "traveling"; % set the mode to traveling
             obj.mode_history = [obj.mode_history, "traveling"];
-
-            obj.goal_target = goal_target;
+            
+            % TODO: goal target theta value should be the direction that current position to goal target
+            goal_target_direction = atan2(goal_target(2) - obj.position(2), goal_target(1) - obj.position(1));
+            obj.goal_target = [goal_target(1), goal_target(2), goal_target_direction];
             obj.goal_target_history = [obj.goal_target_history; goal_target];
 
+            % TODO: add a middle waypoint to the trajectory as the turnning point 
+            middle_waypoint = [obj.position(1), obj.position(2), goal_target_direction];
+            
             obj.rho = rho;
             obj.rho_history = [obj.rho_history; rho];
+            waypoints_turn = [obj.position;middle_waypoint];
+            waypoints_move = [middle_waypoint;obj.goal_target];
+            % TODO: add a time of arrival for the middle waypoint turning should be a small portion of the total travel time
+            
+            obj.trajectory_turn = waypointTrajectory(Waypoints=waypoints_turn,...
+                SampleRate=1/delta_time,TimeOfArrival=[0, rho/5]);
+            obj.trajectory_move = waypointTrajectory(Waypoints=waypoints_move,...
+                SampleRate=1/delta_time,TimeOfArrival=[rho/5, rho] );
+            
+            
 
-            obj.travel_time_remaining = rho; % Initialize travel time counter
-            % calculate the distance to the goal target
-            distance = norm(obj.position - obj.goal_target);
-            % calculate the velocity to reach target in rho time
-            if distance > 0
-                obj.velocity = (obj.goal_target - obj.position) / obj.rho;
-            else
-                obj.velocity = [0, 0];
-            end
+            obj.current_time = 0; % Initialize current time counter
+            
         end
 
         % set_dwelling_time Put the agent into dwelling mode for tau seconds
@@ -252,7 +287,7 @@ classdef Agent < handle
                 obj.tau_history = [obj.tau_history, tau];
 
                 obj.dwelling_time_remaining = tau;
-                obj.velocity = [0, 0]; % stop moving
+                
             end
 
         % set_available_targets Store a list of target objects the agent can visit
@@ -268,11 +303,30 @@ classdef Agent < handle
         function current_target_idx = current_index(obj)
             current_target_idx = 0;
             for i = 1:length(obj.available_targets)
-                if norm(obj.position - obj.available_targets(i).position) < 0.2
+                if norm(obj.position(1:2) - obj.available_targets(i).position) < 0.2
                     current_target_idx = i;
                     break;
                 end
             end
+        end
+
+
+        % motion_energy_calculation Calculate motion power with velocity dependence
+        %   obj = obj.motion_energy_calculation()
+        %
+        % Inputs:
+        %   none
+        %
+        % Outputs:
+        %   obj - updated agent object
+        %
+        % This method calculates the motion power based on the linear velocity.
+        function obj = motion_energy_calculation(obj)
+            % Calculate motion power with velocity dependence
+            drive_current = 0.404 + 0.122/ 0.31 * obj.lin_velocity;  % A (linear velocity dependent) 
+            obj.motion_power = 14.4 * drive_current; % W
+
+            
         end
         % energy_calculation Compute energy usage and update battery state
         %   obj.energy_calculation(delta_time)
@@ -288,27 +342,30 @@ classdef Agent < handle
             ou_noise = obj.ou_noise_history(end) + obj.theta_ou * (obj.mu_ou - obj.ou_noise_history(end)) * delta_time + obj.sigma_ou * sqrt(delta_time) * randn();
             obj.ou_noise_history = [obj.ou_noise_history, ou_noise];
             % Calculate insntantaneous power with OU noise (+- 20% variation)
+            % refresh motion energy calculation
+            obj = motion_energy_calculation(obj);
+
             switch obj.mode
                 case "planning"
                     p_cpu = obj.CPU_PLAN * (1 + 0.2 * ou_noise);
                     p_acc = obj.COMP_ACTIVE * (1 + 0.2 * ou_noise);
-                    p_mot = obj.MOT_IDLE * (1 + 0.2 * ou_noise);
+                    p_mot = obj.motion_power * (1 + 0.2 * ou_noise);
                 case "traveling"
                     p_cpu = obj.CPU_MOVE * (1 + 0.2 * ou_noise);
                     p_acc = obj.COMP_ACTIVE * (1 + 0.2 * ou_noise);
-                    p_mot = obj.MOT_MOVE * (1 + 0.2 * ou_noise);
+                    p_mot = obj.motion_power * (1 + 0.2 * ou_noise);
                 case "dwelling"
                     p_cpu = obj.CPU_IDLE * (1 + 0.2 * ou_noise);
                     p_acc = obj.COMP_STANDBY * (1 + 0.2 * ou_noise);
-                    p_mot = obj.MOT_IDLE * (1 + 0.2 * ou_noise);
+                    p_mot = obj.motion_power * (1 + 0.2 * ou_noise);
                 case "idle"
                     p_cpu = obj.CPU_IDLE * (1 + 0.2 * ou_noise);
                     p_acc = obj.COMP_STANDBY * (1 + 0.2 * ou_noise);
-                    p_mot = obj.MOT_IDLE * (1 + 0.2 * ou_noise);
+                    p_mot = obj.motion_power * (1 + 0.2 * ou_noise);
                 otherwise
                     p_cpu = obj.CPU_IDLE * (1 + 0.2 * ou_noise);
                     p_acc = obj.COMP_STANDBY * (1 + 0.2 * ou_noise);
-                    p_mot = obj.MOT_IDLE * (1 + 0.2 * ou_noise);
+                    p_mot = obj.motion_power * (1 + 0.2 * ou_noise);
             end
             % Apply conversion efficiency loss total power demand
             p_total = (p_cpu + p_acc + p_mot) / Agent.ETA_CONV;
@@ -373,38 +430,50 @@ classdef Agent < handle
                     
 
                 case "traveling"
+                    % TODO not just update trajectory
                     % update the agent position
-                    obj.position = obj.position + obj.velocity * delta_time;
+                    % turning trajectory and moving trajectory update
+                    if obj.current_time <= obj.rho/5
+                        trajectory = obj.trajectory_turn;
+                    else
+                        trajectory = obj.trajectory_move;
+                    end
+                    [position_traj, ~, velocity_traj, acceleration_traj, ~] = lookupPose(trajectory, obj.current_time);
+                    obj.position = position_traj';
+                    velocity_traj = velocity_traj';
+                    obj.velocity = velocity_traj(1:2);
+                    obj.lin_velocity = sqrt(velocity_traj(1)^2 + velocity_traj(2)^2);
+                    obj.lin_acceleration = sqrt(acceleration_traj(1)^2 + acceleration_traj(2)^2);
+                    obj.ang_velocity = velocity_traj(3);
+                    obj.ang_acceleration = acceleration_traj(3);
+                    % obj.lin_velocity_history = [obj.lin_velocity_history, obj.lin_velocity];
+                    % obj.lin_acceleration_history = [obj.lin_acceleration_history, obj.lin_acceleration];
+                    % obj.ang_velocity_history = [obj.ang_velocity_history, obj.ang_velocity];
+                    % obj.ang_acceleration_history = [obj.ang_acceleration_history, obj.ang_acceleration];
 
+                    obj.current_time = obj.current_time + delta_time;
                     % update battery based on energy consumption
                     obj.energy_calculation(delta_time);
                     if obj.battery_percentage <= 10
                         obj.mode = "power_outage";
                         return; % is this needed? what can it do ?
                     end
-                    
+                    % check trajectory content, dump out every detail then
+                    % swith mode. (abandoned time and distance checked)
                     % Count down travel time
-                    obj.travel_time_remaining = obj.travel_time_remaining - delta_time;
-                    
-                    % Check if reached target (trigger to dwelling mode)
-                    distance = norm(obj.position - obj.goal_target);
-                    if distance < 0.1  % Distance-based trigger
-                        %obj.position = obj.goal_target; % snap to target
+                    distance_to_goal = norm(obj.position(1:2) - obj.goal_target(1:2));
+                    if distance_to_goal <= 0.05 || obj.current_time >= obj.rho
+                        obj.position = obj.goal_target;
                         obj.mode = "planning";
                         obj.planning_time = rand(); % random planning time between 0-1s
                         obj.planning_time_remaining = obj.planning_time;
-
-                    elseif obj.travel_time_remaining <= 0  % Time-based failsafe
-                        %obj.position = obj.goal_target; % snap to target
-                        obj.mode = "planning";
-                        obj.planning_time = rand(); % random planning time between 0-1s
-                        obj.planning_time_remaining = obj.planning_time;
-
                     end
+                    
+                    
                     
                 case "dwelling"
                     % stay at target position
-                    obj.position = obj.goal_target;
+                    
                     obj.velocity = [0, 0];
 
                     % update battery based on energy consumption
@@ -441,7 +510,7 @@ classdef Agent < handle
                     obj.energy_calculation(delta_time);
                     if obj.battery_percentage <= 10
                         obj.mode = "power_outage";
-                        return; % is this needed? what can it do ?
+                        return; 
                     end
 
                     % Check if planning time is finished
@@ -487,7 +556,7 @@ classdef Agent < handle
                                     new_rho = x_opt(1);
                                 end
                             end
-                            obj.set_goal_target(obj.available_targets(target_idx).position, new_rho)
+                            obj.set_goal_target([obj.available_targets(target_idx).position,0], new_rho, delta_time)
 
                             
                            

@@ -18,6 +18,7 @@ classdef SimulationVisualizer < handle
         figure_handle
         target_plots
         agent_plots
+        agent_orientation_plots
         uncertainty_text
         time_text
         xlim_range
@@ -50,6 +51,7 @@ classdef SimulationVisualizer < handle
             % Initialize arrays
             obj.target_plots = [];
             obj.agent_plots = [];
+            obj.agent_orientation_plots = [];
             obj.target_uncertainty_texts = [];
             obj.xlim_range = [-5, 15];
             obj.ylim_range = [-5, 15];
@@ -87,9 +89,22 @@ classdef SimulationVisualizer < handle
             for i = 1:length(agents)
                 agent = agents(i);
                 pos = agent.position;
+                x = pos(1);
+                y = pos(2);
+                if length(pos) >= 3
+                    theta = pos(3);
+                else
+                    theta = 0;  % defalut orientation is 0
+                end
+                % Create orientation arrow
+                arrow_lenth = 1.0;
+                x_end = x + arrow_lenth * cos(theta);
+                y_end = y + arrow_lenth * sin(theta);
                 
+                % 
                 % Create agent plot (triangle)
-                plot_handle = plot(pos(1), pos(2), '^', 'MarkerSize', 14, ...
+                orientation_handle = plot([x, x_end], [y, y_end], 'k-', 'LineWidth', 2, 'Color', 'black');
+                plot_handle = plot(x, y, '^', 'MarkerSize', 14, ...
                                  'MarkerFaceColor', 'blue', 'MarkerEdgeColor', 'black', 'LineWidth', 2);
                 
                 % Add agent index text
@@ -97,6 +112,7 @@ classdef SimulationVisualizer < handle
                 
                 % Store plot handle
                 obj.agent_plots = [obj.agent_plots, plot_handle];
+                obj.agent_orientation_plots = [obj.agent_orientation_plots, orientation_handle];
             end
             
             % Set axis limits
@@ -182,9 +198,20 @@ classdef SimulationVisualizer < handle
                 if i <= length(obj.agent_plots)
                     agent = agents(i);
                     pos = agent.position;
-                    
+                    x = pos(1);
+                    y = pos(2);
+                    if length(pos) >= 3
+                        theta = pos(3);
+                    else
+                        theta = 0;  % defalut orientation is 0
+                    end
                     % Update agent position
-                    set(obj.agent_plots(i), 'XData', pos(1), 'YData', pos(2));
+                    set(obj.agent_plots(i), 'XData', x, 'YData', y);
+                    % Update agent orientation
+                    arrow_lenth = 1.0;
+                    x_end = x + arrow_lenth * cos(theta);
+                    y_end = y + arrow_lenth * sin(theta);
+                    set(obj.agent_orientation_plots(i), 'XData', [x, x_end], 'YData', [y, y_end]);
 
                     battery_percentage = agent.battery_percentage;
                     e_total = agent.e_total;
@@ -324,51 +351,55 @@ classdef SimulationVisualizer < handle
         
 
 
-        % plot_energy_battery Visualize agent energy and battery histories
-        %   viz.plot_energy_battery(agents)
+        % plot_targets_uncertainty Visualize target uncertainty dynamic histories
+        %   viz.plot_targets_uncertainty(targets)
         %
         % Inputs:
-        %   agents - array of Agent objects whose histories were recorded
+        %   targets - array of Agent objects whose histories were recorded
         %
         % Opens a figure with two subplots:
-        %   (1) cumulative energy consumption
-        %   (2) battery percentage over time
-        function plot_battery_compare(obj, agents)
-            figure('Name', 'Compare two Battery display', ...
+        %   (1) target uncertainty
+        function plot_targets_uncertainty(obj, targets)
+            figure('Name', 'Overall uncertainty', ...
                          'NumberTitle', 'off', 'Position', [200, 200, 900, 400]);
             
 
             
             hold on; grid on;
-            title('Voltage vs Coulomb'); xlabel('Step'); ylabel('Battery Percentage');
-            for i = 1:numel(agents)
-                soc_volt = agents(i).battery_percentage_history;
-                if isempty(soc_volt); continue; end
-                plot(0:numel(soc_volt)-1, soc_volt, 'DisplayName', sprintf('Agent %d', agents(i).index));
+            title('Dynamic uncertainty'); xlabel('Step'); ylabel('Uncertainty');
+            for i = 1:numel(targets)
+                uncertainty = targets(i).history_uncertainty;
+                if isempty(uncertainty); continue; end
+                plot(0:numel(uncertainty)-1, uncertainty, 'DisplayName', sprintf('Target %d', targets(i).index));
             end
             legend('show', 'Location', 'best');
         end
 
-        function plot_voltage(obj, agents)
-            figure('Name', 'voltage', ...
+        % plot_targets_uncertainty Visualize target uncertainty dynamic histories
+        %   viz.plot_targets_uncertainty(targets)
+        %
+        % Inputs:
+        %   targets - array of Agent objects whose histories were recorded
+        %
+        % Opens a figure with two subplots:
+        %   (1) target uncertainty
+        function plot_overall_objective(obj, targets)
+            figure('Name', 'Overall uncertainty', ...
                          'NumberTitle', 'off', 'Position', [200, 200, 900, 400]);
             
 
             
             hold on; grid on;
-            title('Voltage '); xlabel('Step'); ylabel('V');
-            for i = 1:numel(agents)
-                volt = agents(i).voltage_history;
-                if isempty(volt)
-                     continue; 
-                end
-                
-                plot(0:numel(volt)-1, volt,'DisplayName', sprintf('Agent %d', agents(i).index));
+            title('Dynamic uncertainty'); xlabel('Step'); ylabel('Uncertainty');
+            for i = 1:numel(targets)
+                glob_object = targets(i).history_global_objective;
+                if isempty(glob_object); continue; end
+                plot(0:numel(glob_object)-1, glob_object, 'DisplayName', sprintf('Target %d', targets(i).index));
             end
             legend('show', 'Location', 'best');
-
-            
         end
+
+        
         function plot_lookup(obj, agents)
             figure('Name', 'Battery Polynomial Lookup Table', ...
                          'NumberTitle', 'off', 'Position', [200, 200, 1000, 600]);

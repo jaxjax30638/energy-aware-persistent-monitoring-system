@@ -22,7 +22,7 @@
 
 clear;clc;
 
-T = 3500;
+T = 200;
 delta_time = 0.1;
 
 % Create multiple target objects
@@ -31,9 +31,9 @@ target2 = Target(2, [10, 5], 15, 3.0, 12);
 target3 = Target(3, [10, 10], 20, 1.5, 8);
 
 % Create agent object
-agent1 = Agent(1, [0, 0]);
+agent1 = Agent(1, [0 0 0]);
 agent1.set_available_targets([target1, target2, target3]); % Pass target objects
-agent1.set_goal_target([10, 5], 2); % rho = 5 (travel time)
+agent1.set_goal_target([10, 5, 0], 2,delta_time); % rho = 5 (travel time)
 % Create visualizer
 viz = SimulationVisualizer();
 
