@@ -12,10 +12,10 @@ classdef Agent < handle
     %
     % Inputs:
     %   index    - integer identifier for the agent
-    %   position - 1x2 numeric vector specifying initial [x y] position
+    %   position - 1x3 numeric vector specifying initial [x y theta] position
     %
     % Key properties:
-    %   - position, velocity, mode, battery_percentage, e_total
+    %   - position, mode, battery_percentage, e_total
     %   - energy and coulomb-counting history arrays for analysis
     %
     % Example:
@@ -28,49 +28,28 @@ classdef Agent < handle
         % ===== AGENT STATE =====
         % Agents behavior properties    
         index
-        % position: [x, y, theta] TODO: add theta State   
+        % position: [x, y, theta]
         position
 
         mode
-        mode_history
-        % kinematics models
-        kinematicsModels
-
-        track_width = 0.3;    % meter
-        wheel_radius = 0.05;  % meter
-
-        % controller
-        controller
+        mode_history  % Mode at each time step (matches e_total_history length)
 
         % linear velocity u
         lin_velocity
         lin_acceleration
-        lin_velocity_history
         % angular velocity omega
         ang_velocity
         ang_acceleration
-        ang_velocity_history
-
         % trajectory
-        trajectory_turn
-        trajectory_move
-
-        % velocity for simulation display
-        velocity
-        velocity_history
+        trajectory
 
         goal_target
-        goal_target_history
 
         rho
-        rho_history
 
         tau
-        tau_history
 
         planning_time
-        planning_time_history
-
         dwelling_time_remaining
         planning_time_remaining
         available_targets
@@ -82,9 +61,6 @@ classdef Agent < handle
         motion_power % depend on linear velocity
 
         % Energy history
-        e_cpu_history
-        e_acc_history
-        e_mot_history
         e_total_history
 
         soc
@@ -94,29 +70,32 @@ classdef Agent < handle
         battery_percentage_history
         voltage_history
 
-        % coulomb counting history
-        q_cpu_history
-        q_acc_history
-        q_mot_history
-        q_total_history
-
         % OU noise tracking
-        % ou_noise
         ou_noise_history
-        % ou noise parameters move to constant??
+        % OU noise parameters
         theta_ou = 0.1;
         mu_ou = 0;
         sigma_ou = 0.2;
-
-        sigma_v = 0.003;
 
         % Lookup table properties (built once, reused)
         lookup_voltage_table
         lookup_percentage_table
         lookup_interpolant
 
+        % Phase data for energy prediction model
+        phase_data
+
     end
     properties (Constant)
+        % ===== PHYSICAL PROPERTIES =====
+        MASS = 10.0;              % kg - robot mass (to be measured/specified)
+        ROLLING_FRICTION = 0.02;  % dimensionless - rolling friction coefficient (typical 0.01-0.05)
+        GRAVITY = 9.81;           % m/s²
+
+        % ===== MOTION ENERGY COEFFICIENTS =====
+        P0_BASE_MOTION = 5.82;    % W - from MOT_IDLE (measured idle motor power)
+        ALPHA_VELOCITY = Agent.ROLLING_FRICTION * Agent.MASS * Agent.GRAVITY;  % W·s/m - rolling resistance
+        GAMMA_ACCELERATION = 0.5; % W·s³/m² - acceleration losses (tuned, sensitivity analysis pending) 
         % ===== POWER CONSUMPTION (Watts) =====
         % CPU Power - based on official TurtleBot 4 specs
         CPU_PLAN = 6.0;    % Path planning, SLAM (higher computational load)
@@ -155,20 +134,18 @@ classdef Agent < handle
         R_INTERNAL     = 0.12;  % Ohm (battery internal resistence)
 
         % ===== MOTION POWER =====
-        % Keep Create3 team's measurements as they are based on actual hardware
-        % fixed velocity
-        % include velocity variation(v , u)
-        DRIVE_CURRENT  = 0.526;  % A (0.31m/s linear velocity)
-        IDLE_CURRENT   = 0.404;  % A
-        MOT_MOVE = Agent.BAT_MON_V * Agent.DRIVE_CURRENT;   % 7.57 W
-        MOT_IDLE = Agent.BAT_MON_V * Agent.IDLE_CURRENT;    % 5.82 W
+        % Not using these values anymore, using the energy-optimal velocity profile instead
+        % Used motion_energy_calculation() instead
+        %DRIVE_CURRENT  = 0.526;  % A (0.31m/s linear velocity)
+        %IDLE_CURRENT   = 0.404;  % A
+        %MOT_MOVE = Agent.BAT_MON_V * Agent.DRIVE_CURRENT;   % 7.57 W
+        %MOT_IDLE = Agent.BAT_MON_V * Agent.IDLE_CURRENT;    % 5.82 W
 
         % ===== EFFICIENCY =====
         ETA_CONV = 0.90;  % DC-DC & wiring loss
 
         % ===== BATTERY PERCENTAGE CONVERSION =====
         SOC_TO_PERCENTAGE = 10000;      % Multiply SOC by 10000 (0.01% resolution)
-        PERCENTAGE_TO_SOC = 0.0001;     % Divide percentage by 10000
         SOC_LOOKUP_POINTS = 10001;
 
         % ===== POLYNOMIAL COEFFICIENTS =====
@@ -193,38 +170,23 @@ classdef Agent < handle
         %   position - 1x3 numeric vector specifying initial [x y theta] position
         function obj = Agent(index, position)
             obj.index = index;
-            obj.kinematicsModels = differentialDriveKinematics('TrackWidth', obj.track_width,...
-                'WheelRadius', obj.wheel_radius);
-            obj.controller = controllerPurePursuit;
             obj.position = position;    
             obj.goal_target = [0 0 0]; % default goal target is [0,0,0]
             obj.mode = "idle"; % default mode is idle
-            obj.velocity = [0, 0];
+            obj.mode_history = ["idle"]; % Initialize with starting mode
+            obj.lin_velocity = 0;
+            obj.lin_acceleration = 0;
+            obj.ang_velocity = 0;
+            obj.ang_acceleration = 0;
             obj.dwelling_time_remaining = 0;
             obj.current_time = 0;
             obj.planning_time_remaining = 0;
-            obj.mode_history = [];
-            obj.velocity_history = [];
-            obj.goal_target_history = [];
-            obj.rho_history = [];
-            obj.tau_history = [];
-            obj.planning_time_history = [];
             
-             % Initialize energy properties
+            % Initialize energy properties
             obj.e_total = 0;
-             % OU noise history
-
             obj.ou_noise_history = [0];
 
-            obj.e_cpu_history = [];
-            obj.e_acc_history = [];
-            obj.e_mot_history = [];
             obj.e_total_history = [0]; % start with zero energy consumed
-
-            obj.q_cpu_history = [];
-            obj.q_acc_history = [];
-            obj.q_mot_history = [];
-            obj.q_total_history = [];
 
             obj.battery_percentage = 100;
             obj.battery_percentage_history = [100];
@@ -232,13 +194,20 @@ classdef Agent < handle
             obj.soc = 1;
             obj.soc_history = [1];
             obj.voltage_history = [];
+
+            obj.phase_data = struct('phase_type', {}, 'duration', {}, ...
+                'energy_start', {}, 'energy_end', {}, 'energy_consumed', {}, ...
+            'battery_start', {}, 'battery_end', {}, 'battery_delta', {}, ...
+            'rho', {}, 'tau', {}, 'planning_time', {}, ...
+            'start_time', {}, 'end_time', {});
+            
         end
 
         % set_goal_target Assign a new target and travel time (rho)
         %   obj = obj.set_goal_target(goal_target, rho)
         %
         % Inputs:
-        %   goal_target - 1x2 numeric vector of target [x y]
+        %   goal_target - 1x3 numeric vector of target [x y theta]
         %   rho         - desired travel time to reach the goal (seconds)
         % TODO modify this and add trajectory calculation waypointTrajectory or
         % polynomialTrajectory  They have parameter of arrival time ; Sync
@@ -247,28 +216,93 @@ classdef Agent < handle
         function obj = set_goal_target(obj, goal_target, rho, delta_time)
 
             obj.mode = "traveling"; % set the mode to traveling
-            obj.mode_history = [obj.mode_history, "traveling"];
+            % mode_history will be recorded automatically in energy_calculation()
             
-            % TODO: goal target theta value should be the direction that current position to goal target
+            % goal target theta value should be the direction that current position to goal target
             goal_target_direction = atan2(goal_target(2) - obj.position(2), goal_target(1) - obj.position(1));
             obj.goal_target = [goal_target(1), goal_target(2), goal_target_direction];
-            obj.goal_target_history = [obj.goal_target_history; goal_target];
 
-            % TODO: add a middle waypoint to the trajectory as the turnning point 
-            middle_waypoint = [obj.position(1), obj.position(2), goal_target_direction];
-            
             obj.rho = rho;
-            obj.rho_history = [obj.rho_history; rho];
-            waypoints_turn = [obj.position;middle_waypoint];
-            waypoints_move = [middle_waypoint;obj.goal_target];
-            % TODO: add a time of arrival for the middle waypoint turning should be a small portion of the total travel time
-            
-            obj.trajectory_turn = waypointTrajectory(Waypoints=waypoints_turn,...
-                SampleRate=1/delta_time,TimeOfArrival=[0, rho/5]);
-            obj.trajectory_move = waypointTrajectory(Waypoints=waypoints_move,...
-                SampleRate=1/delta_time,TimeOfArrival=[rho/5, rho] );
-            
-            
+
+            % Record start of traveling phase
+            phase_entry = struct();
+            phase_entry.phase_type = "traveling";
+            phase_entry.rho = rho;
+            phase_entry.energy_start = obj.e_total_history(end);
+            phase_entry.battery_start = obj.battery_percentage_history(end);
+            phase_entry.duration = 0; % Will be updated at end
+            phase_entry.start_time = length(obj.e_total_history); % Time step index
+            phase_entry.tau = [];
+            phase_entry.planning_time = [];
+            phase_entry.energy_end = [];
+            phase_entry.battery_end = [];
+            phase_entry.energy_consumed = [];
+            phase_entry.battery_delta = [];
+            phase_entry.end_time = [];
+            obj.phase_data = [obj.phase_data, phase_entry];
+
+            distance_move = sqrt((obj.goal_target(1) - obj.position(1))^2 + (obj.goal_target(2) - obj.position(2))^2);
+            distance_turn = wrapToPi(goal_target_direction - obj.position(3));
+
+            % set turn speed fixed at 1 rad/s
+            turn_time = abs(distance_turn) / 1;
+            move_time = rho - turn_time;
+
+            % TODO: Need to fixed the turning seems sometimes overshoot or undershoot leads the moving stage moving at the wrong directions 
+            time_stamp = 0:delta_time:rho;
+
+            N = length(time_stamp);
+
+            % Initial arrays
+            lin_vel_plan = zeros(1, N);
+            ang_vel_plan = zeros(1, N);
+            lin_acc_plan = zeros(1, N);
+            ang_acc_plan = zeros(1, N);
+            % Phase 1: Turn
+            turn_end_idx = round(turn_time / delta_time) + 1;
+            if abs(distance_turn) > 0.1 && turn_time > 0
+                if turn_end_idx > N
+                    turn_end_idx = N;
+                end
+                % account for discretization error, actual steps = turn_end_idx - 1
+                actual_steps = turn_end_idx - 1;
+                if actual_steps > 0
+                    exact_ang_vel = distance_turn / (actual_steps * delta_time);
+                else
+                    exact_ang_vel = 0;
+                end
+                ang_vel_plan(1:actual_steps) = exact_ang_vel;
+                ang_acc_plan(1:actual_steps) = 0;
+                lin_vel_plan(1:actual_steps) = 0;
+                lin_acc_plan(1:actual_steps) = 0;
+            else
+                turn_end_idx = 1;
+            end
+            % Phase 2: Move
+            if distance_move > 0.05 && move_time > 0
+                move_start_idx = turn_end_idx +1;
+                [v_move_profile, u_move_profile] = Agent.generate_energy_optimal_velocity_fmincon(distance_move, move_time, delta_time);
+                move_N = length(v_move_profile);
+                for i = 1:move_N
+                    idx = move_start_idx + i - 1;
+                    if idx <= N
+                        lin_vel_plan(idx) = v_move_profile(i);
+                        lin_acc_plan(idx) = u_move_profile(i);
+                    end
+                end
+            else
+                move_start_idx = turn_end_idx +1;
+                lin_vel_plan(move_start_idx:N) = 0;
+                lin_acc_plan(move_start_idx:N) = 0;
+            end
+
+            % store in the trajectory
+            obj.trajectory = struct();
+            obj.trajectory.time = time_stamp;
+            obj.trajectory.lin_vel = lin_vel_plan;
+            obj.trajectory.lin_acc = lin_acc_plan;
+            obj.trajectory.ang_vel = ang_vel_plan;
+            obj.trajectory.ang_acc = ang_acc_plan;
 
             obj.current_time = 0; % Initialize current time counter
             
@@ -281,12 +315,27 @@ classdef Agent < handle
         %   tau - dwelling time (seconds)
         function obj = set_dwelling_time(obj, tau)
                 obj.mode = "dwelling"; % set the mode to dwelling
-                obj.mode_history = [obj.mode_history, "dwelling"];
+                % mode_history will be recorded automatically in energy_calculation()
 
                 obj.tau = tau;
-                obj.tau_history = [obj.tau_history, tau];
-
                 obj.dwelling_time_remaining = tau;
+                
+                % Record start of dwelling phase
+                phase_entry = struct();
+                phase_entry.phase_type = "dwelling";
+                phase_entry.tau = tau;
+                phase_entry.energy_start = obj.e_total_history(end);
+                phase_entry.battery_start = obj.battery_percentage_history(end);
+                phase_entry.duration = 0; % Will be updated at end
+                phase_entry.start_time = length(obj.e_total_history); % Time step index
+                phase_entry.rho = [];
+                phase_entry.planning_time = [];
+                phase_entry.energy_end = [];
+                phase_entry.battery_end = [];
+                phase_entry.energy_consumed = [];
+                phase_entry.battery_delta = [];
+                phase_entry.end_time = [];
+                obj.phase_data = [obj.phase_data, phase_entry];
                 
             end
 
@@ -311,22 +360,28 @@ classdef Agent < handle
         end
 
 
-        % motion_energy_calculation Calculate motion power with velocity dependence
-        %   obj = obj.motion_energy_calculation()
-        %
-        % Inputs:
-        %   none
-        %
-        % Outputs:
-        %   obj - updated agent object
-        %
-        % This method calculates the motion power based on the linear velocity.
         function obj = motion_energy_calculation(obj)
-            % Calculate motion power with velocity dependence
-            drive_current = 0.404 + 0.122/ 0.31 * obj.lin_velocity;  % A (linear velocity dependent) 
-            obj.motion_power = 14.4 * drive_current; % W
-
+            % Physics-based motion power calculation
+            % P_move = P_0 + α·v + γ·u²
+            % where v = lin_velocity, u = lin_acceleration
             
+            % Ensure lin_velocity and lin_acceleration are defined
+            if isempty(obj.lin_velocity) || isnan(obj.lin_velocity)
+                obj.lin_velocity = 0;
+            end
+            if isempty(obj.lin_acceleration) || isnan(obj.lin_acceleration)
+                obj.lin_acceleration = 0;
+            end
+            
+            % Calculate motion power: P = P_0 + α·v + γ·u²
+            obj.motion_power = Agent.P0_BASE_MOTION + ...
+                               Agent.ALPHA_VELOCITY * obj.lin_velocity + ...
+                               Agent.GAMMA_ACCELERATION * (obj.lin_acceleration^2);
+            
+            % Ensure non-negative power
+            if obj.motion_power < 0
+                obj.motion_power = 0;
+            end
         end
         % energy_calculation Compute energy usage and update battery state
         %   obj.energy_calculation(delta_time)
@@ -370,21 +425,10 @@ classdef Agent < handle
             % Apply conversion efficiency loss total power demand
             p_total = (p_cpu + p_acc + p_mot) / Agent.ETA_CONV;
 
-            % Accumulate enery over time
-            e_cpu = p_cpu * delta_time;
-            e_acc = p_acc * delta_time;
-            e_mot = p_mot * delta_time;
-            obj.e_cpu_history = [obj.e_cpu_history, e_cpu];
-            obj.e_acc_history = [obj.e_acc_history, e_acc];
-            obj.e_mot_history = [obj.e_mot_history, e_mot];
-
             % Total enrgy (with efficiency loss)
             obj.e_total = (p_total * delta_time) + obj.e_total_history(end);
-
             obj.e_total_history = [obj.e_total_history,obj.e_total];
 
-
-            
             %% Obtain true SOC through coulomb counting  
             % Update battery state
             soc_current = obj.soc_history(end);
@@ -409,10 +453,7 @@ classdef Agent < handle
             % R_0 internal resistent dynamic flat at the middle spike at the soc high and low *(1+0.2*(1-4*soc_new*(1-soc_new))+0.4*((1-soc_new)^2))
             v_terminal = ocv_current - Agent.R_INTERNAL*i_current;
             obj.voltage_history = [obj.voltage_history, v_terminal];
-            
         end
-
-        
 
     % update_state Advance agent state by delta_time
     %   obj = obj.update_state(delta_time)
@@ -423,36 +464,52 @@ classdef Agent < handle
     % The method updates position, manages mode transitions, and calls
     % energy_calculation to update battery state.
     function obj = update_state(obj, delta_time)
+            % Store previous mode before recording current mode (for logic checks)
+            
+            
+            % Record current mode at this time step (matches e_total_history)
+            obj.mode_history = [obj.mode_history, obj.mode];
+            
             switch obj.mode
                 case "power_outage"
                     % Robot stops moving when battery is below cutoff voltage
-                    obj.velocity = [0, 0];
-                    
+                    obj.lin_velocity = 0;
+                    obj.lin_acceleration = 0;
+                    obj.ang_velocity = 0;
+                    obj.ang_acceleration = 0;
 
                 case "traveling"
-                    % TODO not just update trajectory
-                    % update the agent position
-                    % turning trajectory and moving trajectory update
-                    if obj.current_time <= obj.rho/5
-                        trajectory = obj.trajectory_turn;
+                    % TODO update position based on custom trajectory
+                    % find the index in the trajectory
+                    if isempty(obj.trajectory) || isempty(obj.trajectory.time)
+                        obj.lin_velocity = 0;
+                        obj.lin_acceleration = 0;
+                        obj.ang_velocity = 0;
+                        obj.ang_acceleration = 0;
                     else
-                        trajectory = obj.trajectory_move;
-                    end
-                    [position_traj, ~, velocity_traj, acceleration_traj, ~] = lookupPose(trajectory, obj.current_time);
-                    obj.position = position_traj';
-                    velocity_traj = velocity_traj';
-                    obj.velocity = velocity_traj(1:2);
-                    obj.lin_velocity = sqrt(velocity_traj(1)^2 + velocity_traj(2)^2);
-                    obj.lin_acceleration = sqrt(acceleration_traj(1)^2 + acceleration_traj(2)^2);
-                    obj.ang_velocity = velocity_traj(3);
-                    obj.ang_acceleration = acceleration_traj(3);
-                    % obj.lin_velocity_history = [obj.lin_velocity_history, obj.lin_velocity];
-                    % obj.lin_acceleration_history = [obj.lin_acceleration_history, obj.lin_acceleration];
-                    % obj.ang_velocity_history = [obj.ang_velocity_history, obj.ang_velocity];
-                    % obj.ang_acceleration_history = [obj.ang_acceleration_history, obj.ang_acceleration];
+                        time_array = obj.trajectory.time;
+                        idx = round(obj.current_time / delta_time)+1;
+                        if idx < 1
+                            idx = 1;
+                        elseif idx > length(time_array)
+                            idx = length(time_array);
+                        end
+                        v_lin = obj.trajectory.lin_vel(idx);
+                        u_lin = obj.trajectory.lin_acc(idx);
+                        w_ang = obj.trajectory.ang_vel(idx);
+                        u_ang = obj.trajectory.ang_acc(idx);
 
+                        obj.lin_velocity = v_lin;
+                        obj.lin_acceleration = u_lin;
+                        obj.ang_velocity = w_ang;
+                        obj.ang_acceleration = u_ang;
+                        % using unicycle kinematics model to update position
+                        theta_current = obj.position(3);
+                        obj.position(1) = obj.position(1) + v_lin * cos(theta_current) * delta_time;
+                        obj.position(2) = obj.position(2) + v_lin * sin(theta_current) * delta_time;
+                        obj.position(3) = obj.position(3) + w_ang * delta_time;
+                    end
                     obj.current_time = obj.current_time + delta_time;
-                    % update battery based on energy consumption
                     obj.energy_calculation(delta_time);
                     if obj.battery_percentage <= 10
                         obj.mode = "power_outage";
@@ -464,17 +521,45 @@ classdef Agent < handle
                     distance_to_goal = norm(obj.position(1:2) - obj.goal_target(1:2));
                     if distance_to_goal <= 0.05 || obj.current_time >= obj.rho
                         obj.position = obj.goal_target;
+                        
+                        % Finalize previous traveling phase
+                        if ~isempty(obj.phase_data) && obj.phase_data(end).phase_type == "traveling"
+                            obj.phase_data(end).energy_end = obj.e_total_history(end);
+                            obj.phase_data(end).battery_end = obj.battery_percentage_history(end);
+                            obj.phase_data(end).energy_consumed = obj.phase_data(end).energy_end - obj.phase_data(end).energy_start;
+                            obj.phase_data(end).battery_delta = obj.phase_data(end).battery_end - obj.phase_data(end).battery_start;
+                            obj.phase_data(end).duration = obj.current_time; % Actual travel duration
+                            obj.phase_data(end).end_time = length(obj.e_total_history);
+                        end
+                        
                         obj.mode = "planning";
                         obj.planning_time = rand(); % random planning time between 0-1s
                         obj.planning_time_remaining = obj.planning_time;
+                        
+                        % Record start of planning phase
+                        phase_entry = struct();
+                        phase_entry.phase_type = "planning";
+                        phase_entry.planning_time = obj.planning_time;
+                        phase_entry.energy_start = obj.e_total_history(end);
+                        phase_entry.battery_start = obj.battery_percentage_history(end);
+                        phase_entry.duration = 0;
+                        phase_entry.start_time = length(obj.e_total_history);
+                        phase_entry.rho = [];
+                        phase_entry.tau = [];
+                        phase_entry.energy_end = [];
+                        phase_entry.battery_end = [];
+                        phase_entry.energy_consumed = [];
+                        phase_entry.battery_delta = [];
+                        phase_entry.end_time = [];
+                        obj.phase_data = [obj.phase_data, phase_entry];
                     end
-                    
-                    
-                    
+
                 case "dwelling"
                     % stay at target position
-                    
-                    obj.velocity = [0, 0];
+                    obj.lin_velocity = 0;
+                    obj.lin_acceleration = 0;
+                    obj.ang_velocity = 0;
+                    obj.ang_acceleration = 0;
 
                     % update battery based on energy consumption
                     obj.energy_calculation(delta_time);
@@ -488,22 +573,55 @@ classdef Agent < handle
                     
                     % Check if dwelling time is finished (trigger to new random target)
                     if obj.dwelling_time_remaining <= 0
+                        % Finalize previous dwelling phase
+                        if ~isempty(obj.phase_data) && obj.phase_data(end).phase_type == "dwelling"
+                            obj.phase_data(end).energy_end = obj.e_total_history(end);
+                            obj.phase_data(end).battery_end = obj.battery_percentage_history(end);
+                            obj.phase_data(end).energy_consumed = obj.phase_data(end).energy_end - obj.phase_data(end).energy_start;
+                            obj.phase_data(end).battery_delta = obj.phase_data(end).battery_end - obj.phase_data(end).battery_start;
+                            obj.phase_data(end).duration = obj.tau - obj.dwelling_time_remaining; % Actual dwelling duration
+                            obj.phase_data(end).end_time = length(obj.e_total_history);
+                        end
+                        
                         % Find which target we're currently at
                         obj.mode = "planning";
                         obj.planning_time = rand(); % random planning time between 0-1s
                         obj.planning_time_remaining = obj.planning_time;
+                        
+                        % Record start of planning phase
+                        phase_entry = struct();
+                        phase_entry.phase_type = "planning";
+                        phase_entry.planning_time = obj.planning_time;
+                        phase_entry.energy_start = obj.e_total_history(end);
+                        phase_entry.battery_start = obj.battery_percentage_history(end);
+                        phase_entry.duration = 0;
+                        phase_entry.start_time = length(obj.e_total_history);
+                        phase_entry.rho = [];
+                        phase_entry.tau = [];
+                        phase_entry.energy_end = [];
+                        phase_entry.battery_end = [];
+                        phase_entry.energy_consumed = [];
+                        phase_entry.battery_delta = [];
+                        phase_entry.end_time = [];
+                        obj.phase_data = [obj.phase_data, phase_entry];
                     end
 
                 case "idle" % defalut mode
                     % do nothing, waiting for new target assignment
-                    obj.velocity = [0, 0];
+                    obj.lin_velocity = 0;
+                    obj.lin_acceleration = 0;
+                    obj.ang_velocity = 0;
+                    obj.ang_acceleration = 0;
                     % update battery based on energy consumption
                     obj.energy_calculation(delta_time);
 
 
                 case "planning"
                     % embedded the decision making process here
-                    obj.velocity = [0, 0];
+                    obj.lin_velocity = 0;
+                    obj.lin_acceleration = 0;
+                    obj.ang_velocity = 0;
+                    obj.ang_acceleration = 0;
                     obj.planning_time_remaining = obj.planning_time_remaining - delta_time;
 
                     % update battery based on energy consumption
@@ -515,10 +633,24 @@ classdef Agent < handle
 
                     % Check if planning time is finished
                     if obj.planning_time_remaining <= 0
-                    % while(obj.planning_time_remaining <= 0)
-                        if obj.mode_history(end) == "dwelling"
+                        % Finalize planning phase
+                        if ~isempty(obj.phase_data) && obj.phase_data(end).phase_type == "planning"
+                            obj.phase_data(end).energy_end = obj.e_total_history(end);
+                            obj.phase_data(end).battery_end = obj.battery_percentage_history(end);
+                            obj.phase_data(end).energy_consumed = obj.phase_data(end).energy_end - obj.phase_data(end).energy_start;
+                            obj.phase_data(end).battery_delta = obj.phase_data(end).battery_end - obj.phase_data(end).battery_start;
+                            obj.phase_data(end).duration = obj.planning_time - obj.planning_time_remaining; % Actual planning duration
+                            obj.phase_data(end).end_time = length(obj.e_total_history);
+                        end
                         
-                            obj.mode_history = [obj.mode_history, "planning"];
+                        for i = length(obj.mode_history):-1:1
+                            if obj.mode_history(i) == "dwelling" || obj.mode_history(i) == "traveling"
+                                previous_mode = obj.mode_history(i);
+                                break;
+                            end
+                        end
+                        if previous_mode == "dwelling"
+                            % mode_history will be recorded automatically in energy_calculation()
                             % ===== Random destination selection =====
                             % Select a different target
                             % Find which target agent currently at
@@ -558,11 +690,8 @@ classdef Agent < handle
                             end
                             obj.set_goal_target([obj.available_targets(target_idx).position,0], new_rho, delta_time)
 
-                            
-                           
-                            
-                        elseif obj.mode_history(end) == "traveling"
-                            obj.mode_history = [obj.mode_history, "planning"];
+                        elseif previous_mode == "traveling"
+                            % mode_history will be recorded automatically in energy_calculation()
                             %========= Finding optimze dwelling time using event driven receding horizon=======%
                             % locate current target index
                             current_target_idx = obj.current_index();
@@ -599,12 +728,11 @@ classdef Agent < handle
                                 end
                             end
                             obj.set_dwelling_time(new_tau);
+                        else
+                            fprintf("Invalid previous mode: %s\n", previous_mode);
+                        
                         end
-                    
                     end
-
-
-                    
             end       
         end
         % SOC lookup table (voltage based)
@@ -643,6 +771,24 @@ classdef Agent < handle
                     voltage, voltage_clamped, battery_percentage_volt);
             end
         end    
+
+        % export_phase_data Export phase data to CSV file
+        %   obj.export_phase_data('phase_data.csv')
+        %
+        % Inputs:
+        %   filename - string filename for CSV export
+        function export_phase_data(obj, filename)
+            % Export phase_data to CSV file
+            if isempty(obj.phase_data)
+                warning('No phase data to export');
+                return;
+            end
+            
+            % Convert struct array to table
+            T = struct2table(obj.phase_data);
+            writetable(T, filename);
+            fprintf('Phase data exported to %s\n', filename);
+        end
 
     end
     methods (Static) 
@@ -804,6 +950,118 @@ classdef Agent < handle
             % combine 
             J = (J_first_travel + J_first_dwell) / (rho1 + tau1 );
 
+        end
+
+        function [v_profile, u_profile] = generate_energy_optimal_velocity_fmincon(distance, time_available, delta_time)
+            % Solve energy minimization by optimizing u(t) directly
+            % Then compute v(t) = ∫ u(τ) dτ
+            
+            % ===== STEP 1: Energy Model Parameters =====
+            P0 = Agent.P0_BASE_MOTION;
+            alpha = Agent.ALPHA_VELOCITY;
+            gamma = Agent.GAMMA_ACCELERATION;
+            T = time_available;
+            D = distance;
+            
+            % Discretize time
+            
+            time_array = 0:delta_time:T;
+            N = length(time_array);
+            
+            % ===== STEP 2: Initial Guess for u(t) =====
+            % Guess: constant acceleration/deceleration profile
+            % u(t) that gives v(0) = 0, v(T) = 0, and covers distance D
+            % For a simple guess: u(t) = a for first half, -a for second half
+            u0_guess = zeros(N, 1);
+            % Simple trapezoidal guess
+            u0_guess(1:round(N/2)) = 2*D / (T^2);      % Accelerate
+            u0_guess(round(N/2)+1:end) = -2*D / (T^2); % Decelerate
+            
+            % ===== STEP 3: Objective Function - Minimize Total Energy =====
+            function E_total = energy_objective(u)
+                % u is a column vector [u₁, u₂, ..., uₙ] representing acceleration
+                
+                % Compute v(t) from u(t) by integration: v(t) = ∫₀^t u(τ) dτ
+                v = zeros(N, 1);
+                v(1) = 0;  % v(0) = 0 (boundary condition)
+                for i = 2:N
+                    % Trapezoidal integration: v(i) = v(i-1) + (u(i-1) + u(i))/2 * Δt
+                    v(i) = v(i-1) + (u(i-1) + u(i)) / 2 * delta_time;
+                end
+                
+                % Ensure non-negative velocity
+                v = max(0, v);
+                
+                % ===== EXPLICIT ENERGY FUNCTION CALCULATION =====
+                % For each time step: P(tᵢ) = P₀ + α·vᵢ + γ·uᵢ²
+                P = zeros(N, 1);
+                for i = 1:N
+                    P(i) = P0 + alpha*v(i) + gamma*(u(i)^2);
+                end
+                
+                % ===== TOTAL ENERGY: E = Σ P(tᵢ) · Δt =====
+                E_total = sum(P) * delta_time;
+            end
+            
+            % ===== STEP 4: Constraints =====
+            function [c, ceq] = constraints(u)
+                % Compute v(t) from u(t) by integration
+                v = zeros(N, 1);
+                v(1) = 0;  % v(0) = 0
+                for i = 2:N
+                    v(i) = v(i-1) + (u(i-1) + u(i)) / 2 * delta_time;
+                end
+                v = max(0, v);  % Non-negativity
+                
+                % Constraint 1: Distance constraint ∫₀^T v(t) dt = D
+                distance_constraint = sum(v) * delta_time - D;
+                
+                % Constraint 2: Final velocity v(T) = 0
+                % v(T) = ∫₀^T u(τ) dτ = 0
+                final_velocity_constraint = v(N);  % v(T) = 0
+                
+                ceq = [distance_constraint; final_velocity_constraint];
+                c = [];  % No inequality constraints (can add max acceleration if needed)
+            end
+            
+            % ===== STEP 5: Bounds =====
+            lb = -inf(N, 1);  % No lower bound on acceleration (or add physical limit)
+            ub = inf(N, 1);   % No upper bound on acceleration (or add physical limit)
+            
+            % Note: No need for linear equality constraints on u(0) since v(0) = 0 is handled in integration
+            
+            % ===== STEP 6: Solve Optimization =====
+            options = optimoptions('fmincon', ...
+                'Display', 'off', ...
+                'Algorithm', 'interior-point', ...
+                'MaxIterations', 1000, ...
+                'OptimalityTolerance', 1e-6);
+            
+            u_opt = fmincon(@energy_objective, u0_guess, [], [], [], [], lb, ub, @constraints, options);
+            
+            % ===== STEP 7: Compute v(t) from optimal u(t) =====
+            u_profile = u_opt';
+            
+            % Integrate to get velocity: v(t) = ∫ u(τ) dτ
+            v_profile = zeros(1, N);
+            v_profile(1) = 0;  % v(0) = 0
+            for i = 2:N
+                v_profile(i) = v_profile(i-1) + (u_profile(i-1) + u_profile(i)) / 2 * delta_time;
+            end
+            
+            % Ensure boundary conditions
+            v_profile(1) = 0;
+            v_profile(end) = 0;  % Should be satisfied by constraint, but ensure
+            
+            % Ensure non-negative velocity
+            v_profile = max(0, v_profile);
+            
+            % Verify distance and energy
+            distance_check = sum(v_profile) * delta_time;
+            P_final = P0 + alpha*v_profile + gamma*(u_profile.^2);
+            E_final = sum(P_final) * delta_time;
+            % fprintf('Distance: desired=%.4f, actual=%.4f\n', D, distance_check);
+            % fprintf('Total energy: E=%.4f J\n', E_final);
         end
 
     end

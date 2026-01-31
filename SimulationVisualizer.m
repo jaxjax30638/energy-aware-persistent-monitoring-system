@@ -308,32 +308,164 @@ classdef SimulationVisualizer < handle
         %   agents - array of Agent objects whose histories were recorded
         %
         % Opens a figure with two subplots:
-        %   (1) cumulative energy consumption
+        %   (1) cumulative energy consumption (color-coded by mode)
         %   (2) battery percentage over time
         function plot_energy_battery(obj, agents)
             fig = figure('Name', 'Agent Energy & Battery History', ...
                          'NumberTitle', 'off', 'Position', [200, 200, 900, 400]);
             tiledlayout(fig, 1, 3, 'Padding', 'compact', 'TileSpacing', 'compact');
 
-            % Left subplot: energy
+            % Left subplot: energy (color-coded by mode)
             nexttile;
             hold on; grid on;
-            title('Cumulative Energy'); xlabel('Step'); ylabel('Energy (Wh)');
+            title('Cumulative Energy (Color-coded by Mode)'); xlabel('Step'); ylabel('Energy (Wh)');
+            
+            % Define mode colors
+            mode_colors = containers.Map();
+            mode_colors('traveling') = [0, 0, 1];      % Blue
+            mode_colors('dwelling') = [0, 1, 1];       % Cyan
+            mode_colors('planning') = [1, 0, 1];       % Magenta
+            mode_colors('idle') = [0.5, 0.5, 0.5];    % Gray
+            mode_colors('power_outage') = [1, 0, 0];   % Red
+            
             for i = 1:numel(agents)
-                energy = agents(i).e_total_history;
+                agent = agents(i);
+                energy = agent.e_total_history;
                 if isempty(energy); continue; end
-                plot(0:numel(energy)-1, energy, 'DisplayName', sprintf('Agent %d', agents(i).index));
+                
+                % Use mode_history which now records mode at each time step
+                mode_history = agent.mode_history;
+                if isempty(mode_history)
+                    % No mode history, plot as single line
+                    plot(0:numel(energy)-1, energy, 'DisplayName', sprintf('Agent %d', agent.index), ...
+                         'LineWidth', 2);
+                    continue;
+                end
+                
+                % mode_history should match energy length, but handle edge cases
+                mode_array = mode_history;
+                if numel(mode_array) ~= numel(energy)
+                    if numel(mode_array) < numel(energy)
+                        % Pad with last known mode
+                        mode_array = [mode_array, repmat(mode_array(end), 1, numel(energy) - numel(mode_array))];
+                    else
+                        % Truncate to match
+                        mode_array = mode_array(1:numel(energy));
+                    end
+                end
+                
+                % Plot energy with color segments based on accurate mode array
+                steps = 0:numel(energy)-1;
+                current_mode = mode_array(1);
+                start_idx = 1;
+                legend_added = containers.Map(); % Track which modes have been added to legend
+                
+                for step = 2:numel(energy)
+                    if mode_array(step) ~= current_mode || step == numel(energy)
+                        % Mode changed or reached end, plot segment
+                        end_idx = step - 1;
+                        if step == numel(energy)
+                            end_idx = step;
+                        end
+                        
+                        if mode_colors.isKey(char(current_mode))
+                            color = mode_colors(char(current_mode));
+                        else
+                            color = [0, 0, 0]; % Default black
+                        end
+                        
+                        % Only add to legend once per mode per agent
+                        legend_key = sprintf('Agent %d: %s', agent.index, current_mode);
+                        if ~legend_added.isKey(legend_key)
+                            plot(steps(start_idx:end_idx), energy(start_idx:end_idx), ...
+                                 'Color', color, 'LineWidth', 2, ...
+                                 'DisplayName', legend_key);
+                            legend_added(legend_key) = true;
+                        else
+                            plot(steps(start_idx:end_idx), energy(start_idx:end_idx), ...
+                                 'Color', color, 'LineWidth', 2, ...
+                                 'HandleVisibility', 'off');
+                        end
+                        
+                        if step < numel(energy)
+                            current_mode = mode_array(step);
+                            start_idx = step;
+                        end
+                    end
+                end
             end
             legend('show', 'Location', 'best');
 
-            % middle subplot: battery percentage
+            % middle subplot: battery percentage (color-coded by mode)
             nexttile;
             hold on; grid on;
-            title('Battery Percentage'); xlabel('Step'); ylabel('Battery (%)');
+            title('Battery Percentage (Color-coded by Mode)'); xlabel('Step'); ylabel('Battery (%)');
+            
             for i = 1:numel(agents)
-                soc = agents(i).battery_percentage_history;
+                agent = agents(i);
+                soc = agent.battery_percentage_history;
                 if isempty(soc); continue; end
-                plot(0:numel(soc)-1, soc, 'DisplayName', sprintf('Agent %d', agents(i).index));
+                
+                % Use mode_history which now records mode at each time step
+                mode_history = agent.mode_history;
+                if isempty(mode_history)
+                    % No mode history, plot as single line
+                    plot(0:numel(soc)-1, soc, 'DisplayName', sprintf('Agent %d', agent.index), ...
+                         'LineWidth', 2);
+                    continue;
+                end
+                
+                % mode_history should match soc length, but handle edge cases
+                mode_array = mode_history;
+                if numel(mode_array) ~= numel(soc)
+                    if numel(mode_array) < numel(soc)
+                        % Pad with last known mode
+                        mode_array = [mode_array, repmat(mode_array(end), 1, numel(soc) - numel(mode_array))];
+                    else
+                        % Truncate to match
+                        mode_array = mode_array(1:numel(soc));
+                    end
+                end
+                
+                % Plot battery percentage with color segments based on accurate mode array
+                steps = 0:numel(soc)-1;
+                current_mode = mode_array(1);
+                start_idx = 1;
+                legend_added = containers.Map(); % Track which modes have been added to legend
+                
+                for step = 2:numel(soc)
+                    if mode_array(step) ~= current_mode || step == numel(soc)
+                        % Mode changed or reached end, plot segment
+                        end_idx = step - 1;
+                        if step == numel(soc)
+                            end_idx = step;
+                        end
+                        
+                        if mode_colors.isKey(char(current_mode))
+                            color = mode_colors(char(current_mode));
+                        else
+                            color = [0, 0, 0]; % Default black
+                        end
+                        
+                        % Only add to legend once per mode per agent
+                        legend_key = sprintf('Agent %d: %s', agent.index, current_mode);
+                        if ~legend_added.isKey(legend_key)
+                            plot(steps(start_idx:end_idx), soc(start_idx:end_idx), ...
+                                 'Color', color, 'LineWidth', 2, ...
+                                 'DisplayName', legend_key);
+                            legend_added(legend_key) = true;
+                        else
+                            plot(steps(start_idx:end_idx), soc(start_idx:end_idx), ...
+                                 'Color', color, 'LineWidth', 2, ...
+                                 'HandleVisibility', 'off');
+                        end
+                        
+                        if step < numel(soc)
+                            current_mode = mode_array(step);
+                            start_idx = step;
+                        end
+                    end
+                end
             end
             legend('show', 'Location', 'best');
 

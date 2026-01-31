@@ -1,21 +1,57 @@
-rho = 20;
-waypoints_turn = [0 0 0; 0 0 5];
+% System parameters
+a1 = 0;       % example numbers, plug yours in
+a2 = 0;
+b1 = 1;
 
-waypoints_move = [0 0 5; 5 5 5];
-
-trajectory_turn = waypointTrajectory(Waypoints=waypoints_turn,...
-    SampleRate=1/delta_time,TimeOfArrival=[0, rho/5] );
-trajectory_move = waypointTrajectory(Waypoints=waypoints_move,...
-    SampleRate=1/delta_time,TimeOfArrival=[rho/5, rho] );
-t_vec = 0: delta_time : rho;
-
-for time_step = 0: delta_time : rho
-    if time_step <= rho/5
-        [position_traj, ~, velocity_traj, acceleration_traj, ~] = lookupPose(trajectory_turn, time_step);
-    else
-        [position_traj, ~, velocity_traj, acceleration_traj, ~] = lookupPose(trajectory_move, time_step );
-    end
-    fprintf('Time step %d: position = [%.1f, %.1f, %.1f], velocity = [%.1f, %.1f, %.1f], acceleration = [%.1f, %.1f, %.1f]\n', time_step, position_traj(1), position_traj(2), position_traj(3), velocity_traj(1), velocity_traj(2), velocity_traj(3), acceleration_traj(1), acceleration_traj(2), acceleration_traj(3));
-end
+A = [0 1; a2 a1];
+B = [0; b1];
 
 
+% Desired arrived time rho
+rho = 4;
+
+% ========== POLE PLACEMENT METHOD (COMMENTED OUT) ==========
+% % Desired poles
+% imagine part , same pole 
+% p = [-4/rho -4/rho];
+% 
+% % Compute feedback gains
+% K_mat = place(A, B, p);
+% K = -K_mat;   % match your control law: u = KX + ubar
+
+% ========== LQR METHOD ==========
+% LQR weight matrices - scaled with rho for desired settling time
+Q = [10/4^2, 0;      % Position error penalty (scales with rho)
+     0,        1/4];  % Velocity error penalty (scales with rho)
+R = 1;                 % Control effort penalty
+
+% Compute LQR feedback gains
+[K_mat, S, E] = lqr(A, B, Q, R);
+K = -K_mat;   % match your control law: u = KX + ubar
+
+% Display eigenvalues for comparison
+fprintf('LQR eigenvalues: %.3f, %.3f\n', real(E(1)), real(E(2)));
+fprintf('Desired poles (from pole placement): %.3f, %.3f\n', -4/rho, -6/rho);
+
+% Desired final state
+y = 20;          % move to x = 1
+XE = [y; 0];
+
+% Compute ubar
+k1 = K(2);
+k2 = K(1);
+ubar = -(a2 + b1*k2)/b1 * y;
+
+% Simulation using ODE45
+f = @(t,X) (A + B*K)*X + B*ubar;
+
+tspan = [0 4];
+X0 = [0; 0];
+
+[t, X] = ode45(f, tspan, X0);
+
+plot(t, X)
+legend('x','xdot')
+xlabel('Time (s)')
+ylabel('State')
+grid on
