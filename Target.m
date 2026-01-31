@@ -70,7 +70,7 @@ classdef Target < handle
         % Sets obj.mode to 'monitor' when the agent is at the same position
         % (exact match) and to 'unmonitor' otherwise.
         function obj = mode_switch(obj, agent_position)
-            if obj.position == agent_position
+            if obj.position == agent_position(1:2)
                 obj.mode = "monitor";
             else
                 obj.mode = "unmonitor";

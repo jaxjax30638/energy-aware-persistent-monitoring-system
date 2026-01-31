@@ -22,7 +22,7 @@
 
 clear;clc;
 
-T = 3500;
+T = 1000;
 delta_time = 0.1;
 
 % Create multiple target objects
@@ -30,10 +30,11 @@ target1 = Target(1, [0, 0], 10, 2.5, 10);
 target2 = Target(2, [10, 5], 15, 3.0, 12);
 target3 = Target(3, [10, 10], 20, 1.5, 8);
 
+
 % Create agent object
-agent1 = Agent(1, [0, 0]);
+agent1 = Agent(1, [0 0 0]);
 agent1.set_available_targets([target1, target2, target3]); % Pass target objects
-agent1.set_goal_target([10, 5], 2); % rho = 5 (travel time)
+agent1.set_goal_target([10, 5, 0], 2,delta_time); % rho = 5 (travel time)
 % Create visualizer
 viz = SimulationVisualizer();
 
@@ -56,7 +57,7 @@ for i = 1:delta_time:T
     % Debug: Print agent state
     fprintf('Agent: pos=[%.1f,%.1f], mode=%s, vel=[%.1f,%.1f]\n', ...
             agent1.position(1), agent1.position(2), agent1.mode, ...
-            agent1.velocity(1), agent1.velocity(2));
+            agent1.lin_velocity, agent1.ang_velocity);
     
     % Update visualization
     viz.update_visualization([target1, target2, target3], [agent1], i*delta_time);
