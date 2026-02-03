@@ -1,4 +1,4 @@
-classdef SimulationVisualizer < handle
+ classdef SimulationVisualizer < handle
     % SIMULATIONVISUALIZER Real-time 2D visualization for the simulation
     %
     % Syntax:
@@ -53,8 +53,8 @@ classdef SimulationVisualizer < handle
             obj.agent_plots = [];
             obj.agent_orientation_plots = [];
             obj.target_uncertainty_texts = [];
-            obj.xlim_range = [-5, 15];
-            obj.ylim_range = [-5, 15];
+            obj.xlim_range = [-10, 20];
+            obj.ylim_range = [-10, 20];
         end
         
         % initialize_plot Prepare initial plot elements for targets and agents
@@ -266,7 +266,10 @@ classdef SimulationVisualizer < handle
                                    'FontSize', 12, 'FontWeight', 'bold', ...
                                    'BackgroundColor', 'white');
             end
-            set(obj.time_text, 'String', sprintf('Time: %.1f', current_time));
+            % Convert seconds to minutes:seconds format
+            minutes = floor(current_time / 60);
+            seconds = mod(current_time, 60);    
+            set(obj.time_text, 'String', sprintf('Time: %d:%05.1f', minutes, seconds));
             
             % Update uncertainty display (below time, with better spacing)
             if isempty(obj.uncertainty_text)
