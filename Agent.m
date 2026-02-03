@@ -85,12 +85,18 @@ classdef Agent < handle
         % Phase data for energy prediction model
         phase_data
 
+        % Receding Horizon Log
+        RH_log
+
     end
     properties (Constant)
         % ===== PHYSICAL PROPERTIES =====
         MASS = 10.0;              % kg - robot mass (to be measured/specified)
         ROLLING_FRICTION = 0.02;  % dimensionless - rolling friction coefficient (typical 0.01-0.05)
         GRAVITY = 9.81;           % m/s²
+        V_MAX = 5.0;              % m/s - maximum velocity
+        U_MAX = 2.0;              % m/s² - maximum acceleration
+        ROTATION_SPEED = 10.0;    % rad/s - maximum rotation speed
 
         % ===== MOTION ENERGY COEFFICIENTS =====
         P0_BASE_MOTION = 5.82;    % W - from MOT_IDLE (measured idle motor power)
@@ -195,11 +201,12 @@ classdef Agent < handle
             obj.soc_history = [1];
             obj.voltage_history = [];
 
-            obj.phase_data = struct('phase_type', {}, 'duration', {}, ...
+            obj.phase_data = struct('phase_type', {}, 'duration', {},'distance', {}, ...
                 'energy_start', {}, 'energy_end', {}, 'energy_consumed', {}, ...
             'battery_start', {}, 'battery_end', {}, 'battery_delta', {}, ...
             'rho', {}, 'tau', {}, 'planning_time', {}, ...
             'start_time', {}, 'end_time', {});
+            obj.RH_log = struct('optimal', {}, 'current_idx', {}, 'goal_idx', {}, 'J_opt', {}, 'opt_values', {}); 
             
         end
 
@@ -223,11 +230,13 @@ classdef Agent < handle
             obj.goal_target = [goal_target(1), goal_target(2), goal_target_direction];
 
             obj.rho = rho;
-
+            distance_move = sqrt((obj.goal_target(1) - obj.position(1))^2 + (obj.goal_target(2) - obj.position(2))^2);
+            distance_turn = wrapToPi(goal_target_direction - obj.position(3));
             % Record start of traveling phase
             phase_entry = struct();
             phase_entry.phase_type = "traveling";
             phase_entry.rho = rho;
+            phase_entry.distance = distance_move;
             phase_entry.energy_start = obj.e_total_history(end);
             phase_entry.battery_start = obj.battery_percentage_history(end);
             phase_entry.duration = 0; % Will be updated at end
@@ -241,14 +250,13 @@ classdef Agent < handle
             phase_entry.end_time = [];
             obj.phase_data = [obj.phase_data, phase_entry];
 
-            distance_move = sqrt((obj.goal_target(1) - obj.position(1))^2 + (obj.goal_target(2) - obj.position(2))^2);
-            distance_turn = wrapToPi(goal_target_direction - obj.position(3));
+            
 
-            % set turn speed fixed at 1 rad/s
-            turn_time = abs(distance_turn) / 1;
+            % set turn speed fixed at 10 rad/s
+            turn_time = abs(distance_turn) / Agent.ROTATION_SPEED;
             move_time = rho - turn_time;
 
-            % TODO: Need to fixed the turning seems sometimes overshoot or undershoot leads the moving stage moving at the wrong directions 
+             
             time_stamp = 0:delta_time:rho;
 
             N = length(time_stamp);
@@ -324,6 +332,7 @@ classdef Agent < handle
                 phase_entry = struct();
                 phase_entry.phase_type = "dwelling";
                 phase_entry.tau = tau;
+                phase_entry.distance = 0;
                 phase_entry.energy_start = obj.e_total_history(end);
                 phase_entry.battery_start = obj.battery_percentage_history(end);
                 phase_entry.duration = 0; % Will be updated at end
@@ -435,7 +444,7 @@ classdef Agent < handle
             ocv_polynomial = polyval(flip(Agent.k_dis), soc_current * 20.0);
             ocv_current = Agent.BAT_MIN_V + (ocv_polynomial - Agent.OCV_EMPTY) * Agent.SCALE_FACTOR;
 
-            i_current = (ocv_current - sqrt(ocv_current^2 - 4 * Agent.R_INTERNAL * p_total)) /2 * Agent.R_INTERNAL;
+            i_current = (ocv_current - sqrt(ocv_current^2 - 4 * Agent.R_INTERNAL * p_total)) /(2 * Agent.R_INTERNAL);
             % Safety check for negative current
             if i_current < 0
                 i_current = 0;
@@ -479,7 +488,6 @@ classdef Agent < handle
                     obj.ang_acceleration = 0;
 
                 case "traveling"
-                    % TODO update position based on custom trajectory
                     % find the index in the trajectory
                     if isempty(obj.trajectory) || isempty(obj.trajectory.time)
                         obj.lin_velocity = 0;
@@ -513,7 +521,7 @@ classdef Agent < handle
                     obj.energy_calculation(delta_time);
                     if obj.battery_percentage <= 10
                         obj.mode = "power_outage";
-                        return; % is this needed? what can it do ?
+                        return; 
                     end
                     % check trajectory content, dump out every detail then
                     % swith mode. (abandoned time and distance checked)
@@ -540,6 +548,7 @@ classdef Agent < handle
                         phase_entry = struct();
                         phase_entry.phase_type = "planning";
                         phase_entry.planning_time = obj.planning_time;
+                        phase_entry.distance = 0;
                         phase_entry.energy_start = obj.e_total_history(end);
                         phase_entry.battery_start = obj.battery_percentage_history(end);
                         phase_entry.duration = 0;
@@ -592,6 +601,7 @@ classdef Agent < handle
                         phase_entry = struct();
                         phase_entry.phase_type = "planning";
                         phase_entry.planning_time = obj.planning_time;
+                        phase_entry.distance = 0;
                         phase_entry.energy_start = obj.e_total_history(end);
                         phase_entry.battery_start = obj.battery_percentage_history(end);
                         phase_entry.duration = 0;
@@ -671,16 +681,34 @@ classdef Agent < handle
 
                             % variable to find mininmal objective value
                             J_temp = inf;
+                            goal_idx_list = [];
+                            J_opt_list = [];
+                            opt_values_list = [];
                             for i = 1:length(avalible_indices)
                                 % try all possible goal target 
                                 goal_target_idx = avalible_indices(i);
-                                x0 = [1; 1];
-                                lb = [1; 1];
+                                % provide lower bound based to make sure agent perform with maximum velocity and acceleration
+                                goal_target_direction = atan2(obj.available_targets(goal_target_idx).position(2) - obj.position(2), obj.available_targets(goal_target_idx).position(1) - obj.position(1));
+                                distance_move = sqrt((obj.available_targets(goal_target_idx).position(1) - obj.position(1))^2 + (obj.available_targets(goal_target_idx).position(2) - obj.position(2))^2);
+                                distance_turn = wrapToPi(goal_target_direction - obj.position(3));
+                                turn_time_capacity = abs(distance_turn) / Agent.ROTATION_SPEED;
+                                % distance check determine triangle or trapezoidal profile
+                                distance_check = Agent.V_MAX ^ 2 / Agent.U_MAX;
+                                if distance_move > distance_check
+                                    move_time_capacity = distance_move / Agent.V_MAX + Agent.V_MAX / Agent.U_MAX;
+                                else
+                                    move_time_capacity = 2 * sqrt(distance_move / Agent.U_MAX);
+                                end
+                                x0 = [5; 1];
+                                lb = [turn_time_capacity + move_time_capacity; 0];
                                 ub = [inf; inf];
                                 % find the optimal decision through fmincon, (objective travel gives the objective value of 3 events horizon) See Function below
                                 [x_opt,J_opt] = fmincon(@(x) Agent.objective_travel(x(1), x(2),  ...
                                     r0i, Ai, Bi,  all_target_indices, goal_target_idx), ...
                                     x0,[],[],[],[],lb, ub);
+                                goal_idx_list = [goal_idx_list, goal_target_idx];
+                                J_opt_list = [J_opt_list, J_opt];
+                                opt_values_list = [opt_values_list, x_opt(1)];
                                 if J_temp > J_opt
                                     J_temp = J_opt;
                                     % Only execute the first event with target id and correspond rho value
@@ -688,6 +716,16 @@ classdef Agent < handle
                                     new_rho = x_opt(1);
                                 end
                             end
+                            % Log the receding horizon decision
+                            RH_entry = struct();
+                            RH_entry.optimal = "travel";
+                            RH_entry.current_idx = current_target_idx;
+                            RH_entry.goal_idx = goal_idx_list;
+                            RH_entry.J_opt = J_opt_list;
+                            RH_entry.opt_values = opt_values_list;
+                            
+                            obj.RH_log = [obj.RH_log, RH_entry];
+
                             obj.set_goal_target([obj.available_targets(target_idx).position,0], new_rho, delta_time)
 
                         elseif previous_mode == "traveling"
@@ -710,10 +748,14 @@ classdef Agent < handle
 
                             % variable to find mininmal objective value
                             J_temp = inf;
+                            goal_idx_list = [];
+                            J_opt_list = [];
+                            opt_values_list = [];
+                
                             for i = 1:length(avalible_indices)
                                 goal_target_idx = avalible_indices(i);
                                 % try all posible target
-                                x0 = [1; 1; 1];
+                                x0 = [5; 1; 1];
                                 lb = [0; 0; 0];
                                 ub = [inf; inf; inf];
                                 % find the optimal decision through fmincon (objective dwell gives the objective value of 2 events horizon) See Function below)
@@ -721,12 +763,24 @@ classdef Agent < handle
                                     r0i, Ai, Bi, ...
                                     current_target_idx, all_target_indices, goal_target_idx), ...
                                     x0, [], [], [], [], lb, ub);
+                                goal_idx_list = [goal_idx_list, goal_target_idx];
+                                J_opt_list = [J_opt_list, J_opt];
+                                opt_values_list = [opt_values_list, x_opt(1)];
                                 if J_temp > J_opt
                                     J_temp = J_opt;
                                     % Only execute the first event with dwelling time tau
                                     new_tau = x_opt(1);
                                 end
                             end
+
+                            % Log the receding horizon decision
+                            RH_entry = struct();
+                            RH_entry.optimal = "dwell";
+                            RH_entry.current_idx = current_target_idx;
+                            RH_entry.goal_idx = goal_idx_list;
+                            RH_entry.J_opt = J_opt_list;
+                            RH_entry.opt_values = opt_values_list;
+                            obj.RH_log = [obj.RH_log, RH_entry];
                             obj.set_dwelling_time(new_tau);
                         else
                             fprintf("Invalid previous mode: %s\n", previous_mode);
@@ -790,6 +844,24 @@ classdef Agent < handle
             fprintf('Phase data exported to %s\n', filename);
         end
 
+        % export_RH_log Export RH log to CSV file
+        %   obj.export_RH_log('RH_log.csv')
+        %
+        % Inputs:
+        %   filename - string filename for CSV export
+        function export_RH_log(obj, filename)
+            % Export RH log to CSV file
+            if isempty(obj.RH_log)
+                warning('No RH log to export');
+                return;
+            end
+            
+            % Convert struct array to table
+            T = struct2table(obj.RH_log);
+            writetable(T, filename);
+            fprintf('RH log exported to %s\n', filename);
+        end
+
     end
     methods (Static) 
         
@@ -846,9 +918,9 @@ classdef Agent < handle
         function J = Dwell(r0_sum, A_sum,r0, A, B, tau)
             t_sat = -r0 / (A-B);
             if t_sat >= tau
-                J = r0_sum + 0.5*(A_sum - B)*tau^2;
+                J = r0_sum*tau + 0.5*(A_sum - B)*tau^2;
             else
-                J = (r0_sum - r0 + 0.5*(A_sum - A)*tau^2) + 0.5 * r0 * t_sat;
+                J = (r0_sum - r0)*tau + 0.5*(A_sum - A)*tau^2 + 0.5 * r0 * t_sat;
             end 
             
         end
@@ -864,7 +936,7 @@ classdef Agent < handle
         % Output:
         %   J     - travel cost contribution for horizon averaging
         function J = Travel(r0_sum,A_sum, rho)
-            J = r0_sum + 0.5*A_sum*rho^2;
+            J = r0_sum*rho + 0.5*A_sum*rho^2;
         end
 
         % objective_dwell Horizon cost for dwell-travel-dwell schedule
@@ -895,7 +967,7 @@ classdef Agent < handle
             % update r0_sum for next event // current target being monitored
             for i = 1: length(all_target_indices)
                 if i == current_target_idx
-                    r0i(current_target_idx) = Agent.uncertainty_mon(r0i(current_target_idx), Ai(current_target_idx),Bi(current_target_idx), rho1);
+                    r0i(current_target_idx) = Agent.uncertainty_mon(r0i(current_target_idx), Ai(current_target_idx),Bi(current_target_idx), tau1);
                 else
                     r0i(i) = Agent.uncertainty_unmon(r0i(i), Ai(i), tau1);
                 end
@@ -907,7 +979,7 @@ classdef Agent < handle
 
             % update r0_sum for next event // all targets are not being monitored
             for i = 1: length(all_target_indices)
-                r0i(i) = Agent.uncertainty_unmon(r0i(i), Ai(i), tau1);
+                r0i(i) = Agent.uncertainty_unmon(r0i(i), Ai(i), rho1);
             end
             %% Second dwell time 
             J_second_dwell = Agent.Dwell(r0_sum, A_sum, r0i(goal_target_idx),Ai(goal_target_idx),Bi(goal_target_idx), tau2);
@@ -962,6 +1034,8 @@ classdef Agent < handle
             gamma = Agent.GAMMA_ACCELERATION;
             T = time_available;
             D = distance;
+            v_max = Agent.V_MAX;
+            u_max = Agent.U_MAX;
             
             % Discretize time
             
@@ -1019,14 +1093,17 @@ classdef Agent < handle
                 % Constraint 2: Final velocity v(T) = 0
                 % v(T) = ∫₀^T u(τ) dτ = 0
                 final_velocity_constraint = v(N);  % v(T) = 0
+
+                % Constraint 3: Maximum velocity constraint v(t) <= v_max
+
                 
                 ceq = [distance_constraint; final_velocity_constraint];
-                c = [];  % No inequality constraints (can add max acceleration if needed)
+                c = v - v_max;  %Only velocity constraint ; accelaration constraint in lb and ub
             end
             
-            % ===== STEP 5: Bounds =====
-            lb = -inf(N, 1);  % No lower bound on acceleration (or add physical limit)
-            ub = inf(N, 1);   % No upper bound on acceleration (or add physical limit)
+            % ===== STEP 5: Bounds ===== 
+            lb = -u_max * ones(N, 1);  % acceleration lower bound
+            ub = u_max * ones(N, 1);   % acceleration upper bound
             
             % Note: No need for linear equality constraints on u(0) since v(0) = 0 is handled in integration
             

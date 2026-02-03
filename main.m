@@ -22,33 +22,38 @@
 
 clear;clc;
 
-T = 1000;
+T = 4000;
 delta_time = 0.1;
 
 % Create multiple target objects
-target1 = Target(1, [0, 0], 10, 2.5, 10);
-target2 = Target(2, [10, 5], 15, 3.0, 12);
-target3 = Target(3, [10, 10], 20, 1.5, 8);
+target1 = Target(1, [0, 0], 10, 1.0, 10);
+target2 = Target(2, [10, 10], 15, 2.0, 10);
+target3 = Target(3, [0, 10], 12, 3.0, 10);
+target4 = Target(4, [10, 0], 13, 4.0, 10);
+
 
 
 % Create agent object
 agent1 = Agent(1, [0 0 0]);
-agent1.set_available_targets([target1, target2, target3]); % Pass target objects
-agent1.set_goal_target([10, 5, 0], 2,delta_time); % rho = 5 (travel time)
+% set available targets for agent1
+agent1.set_available_targets([target1, target2, target3, target4]); % Pass target objects
+agent1.set_goal_target([10, 10, 0], 2,delta_time); % rho = 5 (travel time)
 % Create visualizer
 viz = SimulationVisualizer();
 
 % Initialize plot with all targets and agent
-viz.initialize_plot([target1, target2, target3], [agent1]);
+viz.initialize_plot([target1, target2, target3, target4], [agent1]);
 
 % Simulation loop with visualization
-for i = 1:delta_time:T
+for i = 0:delta_time:T
     fprintf('Time step %d:\n', i);
     
     % Update each target (test monitor mode on target1)
     [R1, objective1, global_objective1] = target1.update_state(delta_time, agent1.position);
     [R2, objective2, global_objective2] = target2.update_state(delta_time, agent1.position);
     [R3, objective3, global_objective3] = target3.update_state(delta_time, agent1.position);
+    [R4, objective4, global_objective4] = target4.update_state(delta_time, agent1.position);
+    
     
     % Update agent
     agent1.update_state(delta_time);
@@ -60,7 +65,8 @@ for i = 1:delta_time:T
             agent1.lin_velocity, agent1.ang_velocity);
     
     % Update visualization
-    viz.update_visualization([target1, target2, target3], [agent1], i*delta_time);
+    % make sure all targets included
+    viz.update_visualization([target1, target2, target3, target4], [agent1], i);
     
     % Print values to console
     fprintf('Target 1: R=%.1f, objective=%.1f, global_objective=%.1f \n', R1, objective1, global_objective1);
