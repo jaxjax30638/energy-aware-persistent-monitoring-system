@@ -22,14 +22,15 @@
 
 clear;clc;
 
-T = 4000;
+T = 3600;
 delta_time = 0.1;
 
 % Create multiple target objects
-target1 = Target(1, [0, 0], 10, 1.0, 10);
-target2 = Target(2, [10, 10], 15, 2.0, 10);
-target3 = Target(3, [0, 10], 12, 3.0, 10);
-target4 = Target(4, [10, 0], 13, 4.0, 10);
+target1 = Target(1, [0, 19], 50, 1.0, 10);
+target2 = Target(2, [-8, 13], 15, 1.5, 10);
+target3 = Target(3, [-7, -6], 12, 1.0, 10);
+target4 = Target(4, [2, -6], 13, 4.0, 15);
+
 
 
 
@@ -37,7 +38,7 @@ target4 = Target(4, [10, 0], 13, 4.0, 10);
 agent1 = Agent(1, [0 0 0]);
 % set available targets for agent1
 agent1.set_available_targets([target1, target2, target3, target4]); % Pass target objects
-agent1.set_goal_target([10, 10, 0], 2,delta_time); % rho = 5 (travel time)
+agent1.set_goal_target([0, 19, 0], 10,delta_time); % rho = 5 (travel time)
 % Create visualizer
 viz = SimulationVisualizer();
 
@@ -53,7 +54,6 @@ for i = 0:delta_time:T
     [R2, objective2, global_objective2] = target2.update_state(delta_time, agent1.position);
     [R3, objective3, global_objective3] = target3.update_state(delta_time, agent1.position);
     [R4, objective4, global_objective4] = target4.update_state(delta_time, agent1.position);
-    
     
     % Update agent
     agent1.update_state(delta_time);
@@ -72,6 +72,7 @@ for i = 0:delta_time:T
     fprintf('Target 1: R=%.1f, objective=%.1f, global_objective=%.1f \n', R1, objective1, global_objective1);
     fprintf('Target 2: R=%.1f, objective=%.1f, global_objective=%.1f \n', R2, objective2, global_objective2);
     fprintf('Target 3: R=%.1f, objective=%.1f, global_objective=%.1f \n', R3, objective3, global_objective3);
+    fprintf('Target 4: R=%.1f, objective=%.1f, global_objective=%.1f \n', R4, objective4, global_objective4);
     fprintf('\n');
     
     % Pause for animation effect
