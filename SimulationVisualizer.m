@@ -534,6 +534,39 @@
             legend('show', 'Location', 'best');
         end
 
+        function plot_RH_objective_breakdown(obj, agents)
+            figure('Name', 'RH Objective Breakdown', ...
+                         'NumberTitle', 'off', 'Position', [200, 200, 900, 400]);
+            
+            hold on; grid on;
+            title('RH Decision: Uncertainty vs Energy Component'); 
+            xlabel('RH Decision Index'); 
+            ylabel('Objective Value');
+            
+            for i = 1:numel(agents)
+                agent = agents(i);
+                if isempty(agent.RH_log); continue; end
+                
+                % Build history arrays from RH_log (requires J_uncertainty_chosen, E_bar_chosen in each entry)
+                decision_idx = 1:length(agent.RH_log);
+                J_unc = zeros(1, length(agent.RH_log));
+                E_bar_vals = zeros(1, length(agent.RH_log));
+                J_combined = zeros(1, length(agent.RH_log));
+                
+                for k = 1:length(agent.RH_log)
+                    entry = agent.RH_log(k);
+                    [chosen_J, idx] = min(entry.J_opt); 
+                    J_unc(k) = entry.J_uncertainty(idx);
+                    E_bar_vals(k) = entry.E_bar(idx) * agent.K;  % K*E_bar 
+                    J_combined(k) = chosen_J;  % chosen goal's J_opt
+                end
+                
+                plot(decision_idx-1, J_unc, 'b-', 'DisplayName', sprintf('Agent %d: J (uncertainty)', agent.index));
+                plot(decision_idx-1, E_bar_vals, 'r-', 'DisplayName', sprintf('Agent %d: K*E_bar (energy)', agent.index));
+                plot(decision_idx-1, J_combined, 'k-', 'DisplayName', sprintf('Agent %d: J_opt (combined)', agent.index));
+            end
+            legend('show', 'Location', 'best');
+        end
         
         function plot_lookup(obj, agents)
             figure('Name', 'Battery Polynomial Lookup Table', ...

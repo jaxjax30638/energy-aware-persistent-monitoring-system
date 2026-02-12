@@ -88,6 +88,12 @@ classdef Agent < handle
         % Receding Horizon Log
         RH_log
 
+        % prediction model
+        travel_predict
+        dwell_predict
+        plan_predict
+        K
+
     end
     properties (Constant)
         % ===== PHYSICAL PROPERTIES =====
@@ -206,8 +212,16 @@ classdef Agent < handle
             'battery_start', {}, 'battery_end', {}, 'battery_delta', {}, ...
             'rho', {}, 'tau', {}, 'planning_time', {}, ...
             'start_time', {}, 'end_time', {});
-            obj.RH_log = struct('optimal', {}, 'current_idx', {}, 'goal_idx', {}, 'J_opt', {}, 'opt_values', {}); 
-            
+            obj.RH_log = struct('optimal', {}, 'current_idx', {}, 'goal_idx', {}, 'J_opt', {}, ...
+            'opt_values', {}, 'J_uncertainty', {}, 'E_bar', {}); 
+
+            S = load("energy_model_travel.mat");
+            obj.travel_predict = S.energy_model_travel;
+            S = load("energy_model_dwell.mat");
+            obj.dwell_predict = S.energy_model_dwell;
+            S = load("energy_model_plan.mat");
+            obj.plan_predict = S.energy_model_plan;
+            obj.K = 1.0; % energy awareness coefficient
         end
 
         % set_goal_target Assign a new target and travel time (rho)
@@ -684,6 +698,9 @@ classdef Agent < handle
                             goal_idx_list = [];
                             J_opt_list = [];
                             opt_values_list = [];
+                            J_uncertainty_list = [];
+                            E_bar_list = [];
+                            
                             for i = 1:length(avalible_indices)
                                 % try all possible goal target 
                                 goal_target_idx = avalible_indices(i);
@@ -692,6 +709,7 @@ classdef Agent < handle
                                 distance_move = sqrt((obj.available_targets(goal_target_idx).position(1) - obj.position(1))^2 + (obj.available_targets(goal_target_idx).position(2) - obj.position(2))^2);
                                 distance_turn = wrapToPi(goal_target_direction - obj.position(3));
                                 turn_time_capacity = abs(distance_turn) / Agent.ROTATION_SPEED;
+                                % add this in the report
                                 % distance check determine triangle or trapezoidal profile
                                 distance_check = Agent.V_MAX ^ 2 / Agent.U_MAX;
                                 if distance_move > distance_check
@@ -699,16 +717,24 @@ classdef Agent < handle
                                 else
                                     move_time_capacity = 2 * sqrt(distance_move / Agent.U_MAX);
                                 end
+                                % add this multiplier to change lb and create better data to train
+                                % this prevent the agent to use max energy data to travel
+                                multiplier = 1.0;
                                 x0 = [5; 1];
-                                lb = [turn_time_capacity + move_time_capacity; 0];
+                                lb = [(turn_time_capacity + move_time_capacity) * multiplier; 0];
                                 ub = [inf; inf];
                                 % find the optimal decision through fmincon, (objective travel gives the objective value of 3 events horizon) See Function below
                                 [x_opt,J_opt] = fmincon(@(x) Agent.objective_travel(x(1), x(2),  ...
-                                    r0i, Ai, Bi,  all_target_indices, goal_target_idx), ...
+                                    r0i, Ai, Bi,  all_target_indices, goal_target_idx) + obj.K * obj.objective_travel_energy(x(1), x(2), distance_move), ...
                                     x0,[],[],[],[],lb, ub);
+                                J_uncertainty = Agent.objective_travel(x_opt(1), x_opt(2),  ...
+                                    r0i, Ai, Bi,  all_target_indices, goal_target_idx);
+                                E_bar = obj.objective_travel_energy(x_opt(1), x_opt(2), distance_move);
                                 goal_idx_list = [goal_idx_list, goal_target_idx];
                                 J_opt_list = [J_opt_list, J_opt];
                                 opt_values_list = [opt_values_list, x_opt(1)];
+                                J_uncertainty_list = [J_uncertainty_list, J_uncertainty];
+                                E_bar_list = [E_bar_list, E_bar];
                                 if J_temp > J_opt
                                     J_temp = J_opt;
                                     % Only execute the first event with target id and correspond rho value
@@ -723,6 +749,8 @@ classdef Agent < handle
                             RH_entry.goal_idx = goal_idx_list;
                             RH_entry.J_opt = J_opt_list;
                             RH_entry.opt_values = opt_values_list;
+                            RH_entry.J_uncertainty = J_uncertainty_list;
+                            RH_entry.E_bar = E_bar_list;
                             
                             obj.RH_log = [obj.RH_log, RH_entry];
 
@@ -751,9 +779,12 @@ classdef Agent < handle
                             goal_idx_list = [];
                             J_opt_list = [];
                             opt_values_list = [];
-                
+                            J_uncertainty_list = [];
+                            E_bar_list = [];
+                            
                             for i = 1:length(avalible_indices)
                                 goal_target_idx = avalible_indices(i);
+                                distance_move = sqrt((obj.available_targets(goal_target_idx).position(1) - obj.position(1))^2 + (obj.available_targets(goal_target_idx).position(2) - obj.position(2))^2);
                                 % try all posible target
                                 x0 = [5; 1; 1];
                                 lb = [0; 0; 0];
@@ -761,11 +792,17 @@ classdef Agent < handle
                                 % find the optimal decision through fmincon (objective dwell gives the objective value of 2 events horizon) See Function below)
                                 [x_opt,J_opt] = fmincon(@(x) Agent.objective_dwell(x(1), x(2), x(3), ...
                                     r0i, Ai, Bi, ...
-                                    current_target_idx, all_target_indices, goal_target_idx), ...
+                                    current_target_idx, all_target_indices, goal_target_idx) + obj.K * obj.objective_dwell_energy(x(1), x(2), x(3), distance_move), ...
                                     x0, [], [], [], [], lb, ub);
+                                J_uncertainty = Agent.objective_dwell(x_opt(1), x_opt(2), x_opt(3), ...
+                                    r0i, Ai, Bi, ...
+                                    current_target_idx, all_target_indices, goal_target_idx);
+                                E_bar = obj.objective_dwell_energy(x_opt(1), x_opt(2), x_opt(3), distance_move);
                                 goal_idx_list = [goal_idx_list, goal_target_idx];
                                 J_opt_list = [J_opt_list, J_opt];
                                 opt_values_list = [opt_values_list, x_opt(1)];
+                                J_uncertainty_list = [J_uncertainty_list, J_uncertainty];
+                                E_bar_list = [E_bar_list, E_bar];
                                 if J_temp > J_opt
                                     J_temp = J_opt;
                                     % Only execute the first event with dwelling time tau
@@ -780,6 +817,8 @@ classdef Agent < handle
                             RH_entry.goal_idx = goal_idx_list;
                             RH_entry.J_opt = J_opt_list;
                             RH_entry.opt_values = opt_values_list;
+                            RH_entry.J_uncertainty = J_uncertainty_list;
+                            RH_entry.E_bar = E_bar_list;
                             obj.RH_log = [obj.RH_log, RH_entry];
                             obj.set_dwelling_time(new_tau);
                         else
@@ -862,6 +901,92 @@ classdef Agent < handle
             fprintf('RH log exported to %s\n', filename);
         end
 
+
+        % Travel_Energy Evaluate travel-phase energy contribution
+        %   E = Agent.Travel_Energy(duration, distance)
+        %
+        % Inputs:
+        %   duration - travel duration
+        %   distance - travel distance
+        %
+        % Output:
+        %   E     - travel energy consumption
+        function E = travel_energy_prediction(obj, duration, distance)
+            E = predict(obj.travel_predict, [duration, distance]);
+        end
+
+        % Dwelling_Energy Evaluate dwelling-phase energy contribution
+        %   E = Agent.Dwelling_Energy(duration, distance)
+        %
+        % Inputs:
+        %   duration - dwelling duration
+        %   distance - dwelling distance
+        %   distance - defalut to 0
+        %
+        % Output:
+        %   E     - dwelling energy consumption
+        function E = dwelling_energy_prediction(obj, duration, distance)
+            E = predict(obj.dwell_predict, [duration, distance]);
+        end
+
+        % Planning_Energy Evaluate planning-phase energy contribution
+        %   E = Agent.Planning_Energy(duration, distance)
+        %
+        % Inputs:
+        %   duration - travel duration
+        %   distance - travel distance
+        %
+        % Output:
+        %   E     - planning energy consumption
+        function E = planning_energy_prediction(obj, duration, distance)
+            E = predict(obj.plan_predict, [duration, distance]);
+        end
+
+
+        %   E_bar = obj.objective_dwell_energy(tau1, rho1, tau2, distance)
+        %
+        % Inputs:
+        %   tau1        - first dwell duration
+        %   rho1        - travel duration
+        %   tau2        - second dwell duration
+        %   distance    - travel distance
+        %
+        % Output:
+        %   E_bar       - average energy consumption over the combined horizon
+        function E_bar = objective_dwell_energy(obj, tau1, rho1 , tau2, distance)
+            % consist with dwell->travel->dwell
+            E_plan = obj.planning_energy_prediction(0.8, 0);
+            E_dwell = obj.dwelling_energy_prediction(tau1, 0);
+            E_travel = obj.travel_energy_prediction(rho1, distance);
+            E_dwell2 = obj.dwelling_energy_prediction(tau2, 0);
+            % TODO: in case i forgot i change this
+            % combine (take out event time for now)
+            E_bar = (E_plan + E_dwell + E_travel + E_dwell2) / (0.8 + tau1 + rho1 + tau2);
+
+        end
+
+        %   E_bar = obj.objective_dwell_energy(tau1, rho1, distance)
+        %
+        % Inputs:
+        %   tau1        - first dwell duration
+        %   rho1        - travel duration
+        %   tau2        - second dwell duration
+        %   distance    - travel distance
+        %
+        % Output:
+        %   E_bar       - average energy consumption over the combined horizon
+        function E_bar = objective_travel_energy(obj, rho1 , tau1, distance)
+            % consist with dwell->travel->dwell
+            E_plan = obj.planning_energy_prediction(0.8, 0);
+            E_travel = obj.travel_energy_prediction(rho1, distance);
+            E_dwell = obj.dwelling_energy_prediction(tau1, 0);
+            % TODO: in case i forgot i change this
+            % combine (take out event time for now)
+            E_bar = (E_plan + E_travel + E_dwell) / (0.8 + rho1 + tau1);
+
+        end
+
+
     end
     methods (Static) 
         
@@ -939,6 +1064,8 @@ classdef Agent < handle
             J = r0_sum*rho + 0.5*A_sum*rho^2;
         end
 
+        
+
         % objective_dwell Horizon cost for dwell-travel-dwell schedule
         %   J = Agent.objective_dwell(tau1, rho1, tau2, r0i, Ai, Bi, current_idx, all_idx, goal_idx)
         %
@@ -990,6 +1117,8 @@ classdef Agent < handle
 
         end
 
+                % objective_dwell Horizon cost for dwell-travel-dwell schedule
+        
         % objective_travel Horizon cost for travel-dwell schedule
         %   J = Agent.objective_travel(rho1, tau1, r0i, Ai, Bi, all_idx, goal_idx)
         %
@@ -1023,6 +1152,8 @@ classdef Agent < handle
             J = (J_first_travel + J_first_dwell) / (rho1 + tau1 );
 
         end
+
+        
 
         function [v_profile, u_profile] = generate_energy_optimal_velocity_fmincon(distance, time_available, delta_time)
             % Solve energy minimization by optimizing u(t) directly

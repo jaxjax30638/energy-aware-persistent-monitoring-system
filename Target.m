@@ -69,8 +69,8 @@ classdef Target < handle
         %
         % Sets obj.mode to 'monitor' when the agent is at the same position
         % (exact match) and to 'unmonitor' otherwise.
-        function obj = mode_switch(obj, agent_position)
-            if obj.position == agent_position(1:2)
+        function obj = mode_switch(obj, agent_position, agent_mode)
+            if obj.position == agent_position(1:2) & agent_mode == "dwelling"
                 obj.mode = "monitor";
             else
                 obj.mode = "unmonitor";
@@ -88,14 +88,14 @@ classdef Target < handle
     %   R_value                - updated uncertainty
     %   objective_value        - local objective for this time step
     %   global_objective_value - cumulative/global objective estimate
-    function [R_value, objective_value, global_objective_value] = update_state(obj, delta_time, agent_position)
+    function [R_value, objective_value, global_objective_value] = update_state(obj, delta_time, agent_position, agent_mode)
             total_time = obj.history_time(end);
             obj.history_uncertainty = [obj.history_uncertainty, obj.uncertainty];  % update history
             obj.history_objective = [obj.history_objective, obj.objective];  % update history
             obj.history_global_objective = [obj.history_global_objective, obj.global_objective];  % update history
             total_time = total_time + delta_time;
             obj.history_time = [obj.history_time, total_time];  % update history
-            obj.mode_switch(agent_position);
+            obj.mode_switch(agent_position, agent_mode);
             switch obj.mode 
                 case "monitor"
                     [obj.uncertainty, obj.objective, obj.global_objective] = obj.compute_state(delta_time);

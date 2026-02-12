@@ -26,11 +26,10 @@ T = 3600;
 delta_time = 0.1;
 
 % Create multiple target objects
-target1 = Target(1, [0, 19], 50, 1.0, 10);
-target2 = Target(2, [-8, 13], 15, 1.5, 10);
-target3 = Target(3, [-7, -6], 12, 1.0, 10);
-target4 = Target(4, [2, -6], 13, 4.0, 15);
-
+target1 = Target(1, [15, 19], 50, 1.0, 10);
+target2 = Target(2, [8, -3], 15, 1.5, 10);
+target3 = Target(3, [-5, 7], 12, 1.0, 10);
+target4 = Target(4, [18, 9], 20, 1.3, 10);
 
 
 
@@ -38,7 +37,7 @@ target4 = Target(4, [2, -6], 13, 4.0, 15);
 agent1 = Agent(1, [0 0 0]);
 % set available targets for agent1
 agent1.set_available_targets([target1, target2, target3, target4]); % Pass target objects
-agent1.set_goal_target([0, 19, 0], 10,delta_time); % rho = 5 (travel time)
+agent1.set_goal_target([15, 19, 0], 10,delta_time); % rho = 5 (travel time)
 % Create visualizer
 viz = SimulationVisualizer();
 
@@ -50,10 +49,10 @@ for i = 0:delta_time:T
     fprintf('Time step %d:\n', i);
     
     % Update each target (test monitor mode on target1)
-    [R1, objective1, global_objective1] = target1.update_state(delta_time, agent1.position);
-    [R2, objective2, global_objective2] = target2.update_state(delta_time, agent1.position);
-    [R3, objective3, global_objective3] = target3.update_state(delta_time, agent1.position);
-    [R4, objective4, global_objective4] = target4.update_state(delta_time, agent1.position);
+    [R1, objective1, global_objective1] = target1.update_state(delta_time, agent1.position, agent1.mode);
+    [R2, objective2, global_objective2] = target2.update_state(delta_time, agent1.position, agent1.mode);
+    [R3, objective3, global_objective3] = target3.update_state(delta_time, agent1.position, agent1.mode);
+    [R4, objective4, global_objective4] = target4.update_state(delta_time, agent1.position, agent1.mode);
     
     % Update agent
     agent1.update_state(delta_time);
